@@ -116,6 +116,10 @@ TEST_CASE ("Extreme parameter values at both range edges produce no NaN/Inf", "[
         setParam (processor, ParamIDs::width, useMinimum ? 0.0f : 200.0f);
         setParam (processor, ParamIDs::mix, useMinimum ? 0.0f : 100.0f);
         setParam (processor, ParamIDs::output, useMinimum ? -24.0f : 24.0f);
+        setParam (processor, ParamIDs::space, useMinimum ? 0.0f : 2.0f); // Cathedral / Chamber
+        setParam (processor, ParamIDs::earlyLateBalance, useMinimum ? 0.0f : 100.0f);
+        setParam (processor, ParamIDs::modulation, useMinimum ? 0.0f : 100.0f);
+        setParam (processor, ParamIDs::freeze, useMinimum ? 0.0f : 1.0f);
 
         TestHelpers::fillWithSine (buffer, 44100.0, 440.0, 0.8f);
 

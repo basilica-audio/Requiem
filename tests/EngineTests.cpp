@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <utility>
 
 namespace
 {
@@ -201,4 +202,161 @@ TEST_CASE ("regenerateImpulseResponseIfNeeded() is a no-op unless Decay/Damping 
     TestHelpers::fillWithSine (buffer, testSampleRate, testFrequencyHz, 0.5f);
     CHECK_NOTHROW (engine.process (block));
     CHECK (TestHelpers::allSamplesFinite (buffer));
+}
+
+TEST_CASE ("regenerateImpulseResponseIfNeeded() also reacts to Space/Early-Late-Balance/Freeze changes", "[dsp][engine]")
+{
+    ReverbEngine engine;
+    engine.setDecaySeconds (1.5f);
+    engine.setDampingHz (8000.0f);
+
+    const auto spec = makeTestSpec (2);
+    engine.prepare (spec);
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::dsp::AudioBlock<float> block (buffer);
+
+    auto processAndCheckFinite = [&]
+    {
+        TestHelpers::fillWithSine (buffer, testSampleRate, testFrequencyHz, 0.5f);
+        CHECK_NOTHROW (engine.process (block));
+        CHECK (TestHelpers::allSamplesFinite (buffer));
+    };
+
+    engine.setSpaceType (ReverbIR::SpaceType::cathedral);
+    CHECK_NOTHROW (engine.regenerateImpulseResponseIfNeeded());
+    processAndCheckFinite();
+
+    engine.setEarlyLateBalance (0.2f);
+    CHECK_NOTHROW (engine.regenerateImpulseResponseIfNeeded());
+    processAndCheckFinite();
+
+    engine.setFreeze (true);
+    CHECK_NOTHROW (engine.regenerateImpulseResponseIfNeeded());
+    processAndCheckFinite();
+
+    engine.setFreeze (false);
+    CHECK_NOTHROW (engine.regenerateImpulseResponseIfNeeded());
+    processAndCheckFinite();
+}
+
+TEST_CASE ("Freeze sustains the wet tail's energy well past the non-frozen tail's decay", "[dsp][engine]")
+{
+    // decaySeconds also sizes the generated IR (impulse-response length ==
+    // decaySeconds worth of samples - see ImpulseResponseGenerator.h), so
+    // both the frozen and non-frozen cases still have live convolution
+    // kernel data at the measurement point below (well before the kernel
+    // itself runs out): this test measures the *shape* of the envelope
+    // within that kernel, not the (unrelated) point where the convolution
+    // kernel itself ends.
+    constexpr float decaySeconds = 1.0f;
+    // 18 * 2048 / 48000 ~= 0.77 s: past the RT60-style -45 dB point for the
+    // non-frozen envelope, but comfortably inside the 1 s (48000-sample)
+    // convolution kernel for both cases.
+    constexpr int numBlocks = 18;
+    constexpr int blockSize = 2048;
+
+    auto runAndMeasureLastBlockRms = [] (bool freeze)
+    {
+        ReverbEngine engine;
+        engine.setMixProportion (1.0f); // fully wet
+        engine.setDecaySeconds (decaySeconds);
+        engine.setDampingHz (8000.0f);
+        engine.setPreDelayMs (0.0f);
+        engine.setWidthPercent (100.0f);
+        engine.setOutputDb (0.0f);
+        engine.setFreeze (freeze);
+
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = testSampleRate;
+        spec.maximumBlockSize = static_cast<juce::uint32> (blockSize);
+        spec.numChannels = 2;
+        engine.prepare (spec);
+        engine.regenerateImpulseResponseIfNeeded();
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        double lastBlockRms = 0.0;
+
+        for (int b = 0; b < numBlocks; ++b)
+        {
+            buffer.clear();
+
+            if (b == 0)
+            {
+                buffer.setSample (0, 0, 1.0f);
+                buffer.setSample (1, 0, 1.0f);
+            }
+
+            juce::dsp::AudioBlock<float> block (buffer);
+            engine.process (block);
+
+            if (b == numBlocks - 1)
+                lastBlockRms = TestHelpers::rms (buffer);
+        }
+
+        return lastBlockRms;
+    };
+
+    const auto normalTailRms = runAndMeasureLastBlockRms (false);
+    const auto frozenTailRms = runAndMeasureLastBlockRms (true);
+
+    REQUIRE (std::isfinite (normalTailRms));
+    REQUIRE (std::isfinite (frozenTailRms));
+    REQUIRE (frozenTailRms > 0.0);
+
+    // At this point in the tail, the non-frozen (RT60-decaying) envelope
+    // has dropped well below the frozen (flat-envelope) one.
+    CHECK (frozenTailRms > normalTailRms * 10.0);
+}
+
+TEST_CASE ("Modulation depth measurably changes the wet tail without affecting latency or introducing NaN/Inf", "[dsp][engine]")
+{
+    auto runAndCapture = [] (float modulationAmount01)
+    {
+        ReverbEngine engine;
+        engine.setMixProportion (1.0f);
+        engine.setDecaySeconds (1.0f);
+        engine.setDampingHz (8000.0f);
+        engine.setPreDelayMs (0.0f);
+        engine.setWidthPercent (100.0f);
+        engine.setOutputDb (0.0f);
+        engine.setModulationAmount (modulationAmount01);
+
+        const auto spec = makeTestSpec (2);
+        engine.prepare (spec);
+
+        const auto latency = engine.getLatencySamples();
+
+        juce::AudioBuffer<float> buffer (2, testBlockSize);
+        TestHelpers::fillWithSine (buffer, testSampleRate, testFrequencyHz, 0.5f);
+
+        juce::dsp::AudioBlock<float> block (buffer);
+        engine.process (block);
+
+        return std::make_pair (buffer, latency);
+    };
+
+    const auto [dryModOutput, dryModLatency] = runAndCapture (0.0f);
+    const auto [wetModOutput, wetModLatency] = runAndCapture (1.0f);
+
+    CHECK (TestHelpers::allSamplesFinite (dryModOutput));
+    CHECK (TestHelpers::allSamplesFinite (wetModOutput));
+
+    // Modulation is a wet-only, non-latency-adding stage (see
+    // docs/architecture.md): it must never change reported latency.
+    CHECK (dryModLatency == wetModLatency);
+
+    // Full-depth Modulation must audibly differ from no Modulation.
+    double maxAbsoluteDifference = 0.0;
+
+    for (int channel = 0; channel < dryModOutput.getNumChannels(); ++channel)
+    {
+        const auto* a = dryModOutput.getReadPointer (channel);
+        const auto* b = wetModOutput.getReadPointer (channel);
+
+        for (int i = 0; i < dryModOutput.getNumSamples(); ++i)
+            maxAbsoluteDifference = std::max (maxAbsoluteDifference, static_cast<double> (std::abs (a[i] - b[i])));
+    }
+
+    CHECK (maxAbsoluteDifference > 1.0e-4);
 }

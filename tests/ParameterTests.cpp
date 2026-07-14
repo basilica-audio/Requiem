@@ -57,15 +57,16 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
     {
         static constexpr const char* allIds[] = {
             ParamIDs::decay, ParamIDs::preDelay, ParamIDs::damping, ParamIDs::width, ParamIDs::mix, ParamIDs::output,
+            ParamIDs::space, ParamIDs::earlyLateBalance, ParamIDs::modulation, ParamIDs::freeze,
         };
 
         for (const auto* id : allIds)
             CHECK (apvts.getParameter (id) != nullptr);
     }
 
-    SECTION ("total parameter count matches the v0.1 layout")
+    SECTION ("total parameter count matches the v0.1.0 layout")
     {
-        CHECK (apvts.processor.getParameters().size() == 6);
+        CHECK (apvts.processor.getParameters().size() == 10);
     }
 
     SECTION ("Decay: reverb time defaults and range")
@@ -102,5 +103,36 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
     {
         checkFloatDefault (apvts, ParamIDs::output, 0.0f);
         checkFloatRange (apvts, ParamIDs::output, -24.0f, 24.0f);
+    }
+
+    SECTION ("Space: choice parameter with Cathedral/Hall/Chamber, defaulting to Hall")
+    {
+        auto* param = dynamic_cast<juce::AudioParameterChoice*> (apvts.getParameter (ParamIDs::space));
+        REQUIRE (param != nullptr);
+
+        CHECK (param->choices.size() == 3);
+        CHECK (param->choices[0] == "Cathedral");
+        CHECK (param->choices[1] == "Hall");
+        CHECK (param->choices[2] == "Chamber");
+        CHECK (param->getIndex() == 1); // default: Hall
+    }
+
+    SECTION ("Early/Late Balance: defaults and range")
+    {
+        checkFloatDefault (apvts, ParamIDs::earlyLateBalance, 80.0f);
+        checkFloatRange (apvts, ParamIDs::earlyLateBalance, 0.0f, 100.0f);
+    }
+
+    SECTION ("Modulation: defaults and range")
+    {
+        checkFloatDefault (apvts, ParamIDs::modulation, 0.0f);
+        checkFloatRange (apvts, ParamIDs::modulation, 0.0f, 100.0f);
+    }
+
+    SECTION ("Freeze: boolean parameter, off by default")
+    {
+        auto* param = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter (ParamIDs::freeze));
+        REQUIRE (param != nullptr);
+        CHECK (param->get() == false);
     }
 }
