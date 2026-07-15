@@ -67,6 +67,20 @@ TEST_CASE ("Long-run: thousands of small blocks under full parameter automation 
             FAIL_CHECK ("Non-finite sample at block " << block);
             break;
         }
+
+        // Periodically let the real message-thread Timer actually fire
+        // (see issue #11 item 2: "the full-automation test's Space/Early-
+        // Late-Balance/Freeze coverage" gap). Without this,
+        // RequiemAudioProcessor's 20 Hz juce::Timer never dispatches in
+        // this headless test harness, so none of the Space/Early-Late-
+        // Balance/Freeze combinations set above ever actually get
+        // regenerated/applied - every block in the run would silently keep
+        // processing against whatever IR prepareToPlay() generated from
+        // the defaults, and the "no NaN/Inf" assertions above would only
+        // ever be exercising that one IR, not the randomised parameters
+        // this test claims to cover.
+        if (block % 100 == 99)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
     }
 }
 
@@ -83,6 +97,16 @@ TEST_CASE ("Long-run: frozen tail processed continuously for several seconds sta
     setParam (processor, ParamIDs::mix, 100.0f);
     setParam (processor, ParamIDs::decay, 3.0f);
     setParam (processor, ParamIDs::modulation, 75.0f);
+
+    // Let the real ~20 Hz message-thread Timer actually fire and drive
+    // ReverbEngine::regenerateImpulseResponseIfNeeded() (see issue #11
+    // item 1). Without this, the Freeze/Decay/Modulation values set above
+    // only ever update atomics - the frozen-envelope IR this test is
+    // supposed to be exercising is never actually generated (nor, per
+    // issue #13's fix, handed to the audio thread to load), so the "frozen
+    // tail" measured below would silently just be whatever IR
+    // prepareToPlay() generated from the (non-frozen) defaults.
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
 
     juce::MidiBuffer midi;
     juce::AudioBuffer<float> buffer (2, blockSize);

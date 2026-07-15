@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <vector>
 
 namespace
 {
@@ -250,6 +251,95 @@ TEST_CASE ("Freeze produces a sustained (non-decaying) tail", "[dsp][ir]")
     // the non-frozen tail does.
     CHECK (frozenTailRms > normalTailRms);
     CHECK (frozenTailRms / frozenHeadRms > normalTailRms / normalHeadRms);
+}
+
+TEST_CASE ("Early reflections at very short Decay use a window scaled to the buffer length, not the raw Space window",
+           "[dsp][ir]")
+{
+    // Decay = 0.1 s (the documented minimum) at 44.1 kHz produces a
+    // ~4410-sample buffer, far shorter than Cathedral's 150 ms (~6615
+    // samples) early-reflection window - exactly the "window bigger than
+    // the buffer" scenario from issue #11 item 3.
+    constexpr double sampleRate = 44100.0;
+    constexpr float decaySeconds = ReverbIR::minDecaySeconds;
+    constexpr int seed = 1;
+
+    // Balance = 0.0 forces the diffuse late-tail layer's gain to exactly
+    // zero (generateProceduralImpulseResponse(): lateGain = sin(0 *
+    // halfPi) == 0), so the returned buffer contains *only* the early-
+    // reflection layer's contribution. That lets this test compare
+    // directly against a from-scratch reference re-implementation of
+    // addEarlyReflections() below without also having to reproduce the
+    // (already well-covered elsewhere, e.g. "Left and right channels are
+    // decorrelated") filtered-noise diffuse-tail algorithm.
+    const auto ir = ReverbIR::generateProceduralImpulseResponse (sampleRate, decaySeconds, 8000.0f, 1,
+                                                                   ReverbIR::SpaceType::cathedral, 0.0f, false, seed);
+
+    const auto lengthSamples = ir.getNumSamples();
+    REQUIRE (lengthSamples > 1);
+    REQUIRE (lengthSamples < 6615); // sanity: this really is the "window > buffer" scenario the fix targets.
+
+    // Reference re-implementation of addEarlyReflections(), mirroring
+    // Cathedral's documented characteristics (150 ms window, 22 taps, 0.85
+    // per-tap decay factor - see ImpulseResponseGenerator.cpp's
+    // characteristicsFor()), the documented seed formula for the
+    // early-reflection Random stream (ImpulseResponseGenerator.cpp:
+    // `seed * 40503 + channel * 6151 + 101`, channel 0 here), and the
+    // *fixed* windowing rule this test exists to pin down: the effective
+    // window is scaled down to the buffer length whenever the buffer is
+    // shorter than the raw Space window, so tap offsets are always drawn
+    // from [0, lengthSamples) and (bar an astronomically unlikely exact
+    // draw) never collapse onto a single clamped index. Before the fix,
+    // production code used the raw (unscaled) window here instead, so this
+    // reference would diverge from its output for any seed/Decay/Space
+    // combination where the raw window exceeds the buffer - as this one
+    // does.
+    constexpr float earlyWindowMs = 150.0f;
+    constexpr int numTaps = 22;
+    constexpr float tapDecayFactor = 0.85f;
+
+    const auto rawWindowSamples = juce::jmax (1, static_cast<int> (std::round (earlyWindowMs * 0.001 * sampleRate)));
+    const auto effectiveWindowSamples = juce::jmin (rawWindowSamples, lengthSamples);
+
+    std::vector<float> reference (static_cast<size_t> (lengthSamples), 0.0f);
+    juce::Random random (static_cast<juce::int64> (seed) * 40503 + 101); // channel == 0
+
+    float tapAmplitude = 1.0f; // gain == 1.0 (early-only: Early/Late Balance == 0.0)
+
+    for (int tap = 0; tap < numTaps; ++tap)
+    {
+        if (tap == 0)
+        {
+            reference[0] += tapAmplitude;
+        }
+        else
+        {
+            const auto sampleIndex = juce::jlimit (0, lengthSamples - 1,
+                                                    static_cast<int> (random.nextFloat() * static_cast<float> (effectiveWindowSamples)));
+            const auto polarity = random.nextFloat() < 0.5f ? -1.0f : 1.0f;
+            const auto jitter = 0.85f + 0.3f * random.nextFloat();
+
+            reference[static_cast<size_t> (sampleIndex)] += tapAmplitude * polarity * jitter;
+        }
+
+        tapAmplitude *= tapDecayFactor;
+    }
+
+    const auto* data = ir.getReadPointer (0);
+    int firstMismatchIndex = -1;
+
+    for (int i = 0; i < lengthSamples; ++i)
+    {
+        if (std::abs (data[i] - reference[static_cast<size_t> (i)]) > 1.0e-6f)
+        {
+            firstMismatchIndex = i;
+            break;
+        }
+    }
+
+    INFO ("first mismatch at index: " << firstMismatchIndex << " (lengthSamples: " << lengthSamples
+          << ", rawWindowSamples: " << rawWindowSamples << ", effectiveWindowSamples: " << effectiveWindowSamples << ")");
+    CHECK (firstMismatchIndex == -1);
 }
 
 TEST_CASE ("Freeze suppresses the early-reflection layer and ignores Early/Late Balance", "[dsp][ir]")

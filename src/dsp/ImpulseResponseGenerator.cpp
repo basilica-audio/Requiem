@@ -49,6 +49,17 @@ namespace ReverbIR
             const auto characteristics = characteristicsFor (space);
             const auto windowSamples = juce::jmax (1, static_cast<int> (std::round (characteristics.earlyWindowMs * 0.001 * sampleRate)));
 
+            // If the requested Decay is short enough that the buffer itself
+            // (lengthSamples) is smaller than the Space preset's early-
+            // reflection window (e.g. Decay = 0.1 s => ~4.4 ms buffer at
+            // 44.1 kHz vs. Cathedral's 150 ms window), scale the effective
+            // window down to the buffer length. Without this, tap positions
+            // computed from `random.nextFloat() * windowSamples` are mostly
+            // out of range and collapse onto the jlimit() clamp below at
+            // exactly `lengthSamples - 1` instead of scattering across the
+            // (short) buffer - see tests/ImpulseResponseGeneratorTests.cpp.
+            const auto effectiveWindowSamples = juce::jmin (windowSamples, lengthSamples);
+
             float tapAmplitude = gain;
 
             for (int tap = 0; tap < characteristics.numTaps; ++tap)
@@ -60,7 +71,7 @@ namespace ReverbIR
                 else
                 {
                     const auto sampleIndex = juce::jlimit (0, lengthSamples - 1,
-                                                            static_cast<int> (random.nextFloat() * static_cast<float> (windowSamples)));
+                                                            static_cast<int> (random.nextFloat() * static_cast<float> (effectiveWindowSamples)));
 
                     const auto polarity = random.nextFloat() < 0.5f ? -1.0f : 1.0f;
                     // +/-15% amplitude jitter per tap, for a less mechanical
