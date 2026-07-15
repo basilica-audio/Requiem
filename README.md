@@ -12,7 +12,7 @@
 <!-- ==BEGIN BODY== (plugin engineer: replace this block with What it is / Features / Signal flow / Roadmap) -->
 ## What it is
 
-Requiem is a cinematic **convolution reverb** built for orchestral and choral space in symphonic metal productions - cathedral, hall, and chamber-style tails for strings, choir, and everything that needs to bloom into a wide, dark stereo image behind the wall of guitars. Rather than shipping (and licensing) an IR sample library, its impulse response is generated **procedurally**, off the audio thread, from Decay, Damping, Space, and Early/Late Balance - or you can load your own WAV/AIFF impulse response to override it entirely.
+Requiem is a cinematic **convolution reverb** built for orchestral and choral space in heavy productions - cathedral, hall, and chamber-style tails for strings, choir, and everything that needs to bloom into a wide, dark stereo image behind the wall of guitars. Rather than shipping (and licensing) an IR sample library, its impulse response is generated **procedurally**, off the audio thread, from Decay, Damping, Space, and Early/Late Balance - or you can load your own WAV/AIFF impulse response to override it entirely.
 
 ## Features
 

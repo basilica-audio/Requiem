@@ -6,11 +6,11 @@
 
 ## What Requiem is
 
-Requiem is a convolution reverb built specifically for the orchestral/choral layer of a symphonic-metal mix - strings, choir, pads, ambient textures - rather than as a general-purpose reverb for every source. It generates its own impulse response procedurally (no bundled sample library to license or manage), shaped by controls that map to musically meaningful decisions: how big the space is, how bright or dark the tail sounds, how much of a distinct early "slap" it has versus a smooth wash, and whether it should sustain forever rather than decay. You can also load your own captured impulse response (a real cathedral, hall, plate, or anything else in WAV/AIFF/etc) if you want a specific, non-procedural space instead.
+Requiem is a convolution reverb built specifically for the orchestral/choral layer of a heavy-music mix - strings, choir, pads, ambient textures - rather than as a general-purpose reverb for every source. It generates its own impulse response procedurally (no bundled sample library to license or manage), shaped by controls that map to musically meaningful decisions: how big the space is, how bright or dark the tail sounds, how much of a distinct early "slap" it has versus a smooth wash, and whether it should sustain forever rather than decay. You can also load your own captured impulse response (a real cathedral, hall, plate, or anything else in WAV/AIFF/etc) if you want a specific, non-procedural space instead.
 
-## Where it sits in a symphonic-metal chain
+## Where it sits in a heavy production chain
 
-Symphonic metal productions typically separate the "aggressive" layer (rhythm guitars, drums, bass) from the "cinematic" layer (orchestra, choir, pads, ambience) so each can be processed and placed in the mix independently. Requiem is designed for the second layer:
+Heavy productions with orchestral elements typically separate the "aggressive" layer (rhythm guitars, drums, bass) from the "cinematic" layer (orchestra, choir, pads, ambience) so each can be processed and placed in the mix independently. Requiem is designed for the second layer:
 
 - **Strings/orchestra bus**: a Hall or Cathedral space with a moderate Mix (30-50%) gives the orchestral layer room to breathe without smearing rhythmic detail. Use Pre-Delay to keep fast passages (spiccato, tremolo strings) intelligible - a bit of gap before the tail arrives preserves attack clarity.
 - **Choir bus**: choir tends to want more reverb than instruments to sound "cathedral-scale" - try Cathedral space, a longer Decay, and a higher Mix than you'd use on strings. Damping pulled down slightly (a darker tail) keeps sibilance/breath noise from building up in the wash.

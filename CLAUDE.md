@@ -1,6 +1,6 @@
 # Requiem — cinematic convolution reverb (space)
 
-Per-repo working memory for Claude Code sessions on this plugin. Part of the **Metal up your ass** symphonic-metal plugin suite (`github.com/basilica-audio`).
+Per-repo working memory for Claude Code sessions on this plugin. Part of the **Basilica Audio** plugin suite — sacred-architecture DSP for heavy music (`github.com/basilica-audio`).
 
 ## What this is
 Requiem is the "cinematic convolution reverb (space)" member of the suite. AU / VST3 / Standalone, JUCE 8.
