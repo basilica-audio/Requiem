@@ -4,7 +4,7 @@
 
 *A cathedral in a box — cinematic convolution reverb for orchestral and choral space.*
 
-[![CI](https://github.com/metal-up-your-ass/requiem/actions/workflows/ci.yml/badge.svg)](https://github.com/metal-up-your-ass/requiem/actions/workflows/ci.yml)
+[![CI](https://github.com/basilica-audio/requiem/actions/workflows/ci.yml/badge.svg)](https://github.com/basilica-audio/requiem/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 > **Work in progress.** Requiem is pre-1.0 and under active development. There are no built binaries or releases yet — building from source is currently the only way to run it. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
@@ -53,7 +53,7 @@ Full musical descriptions and usage tips: [`docs/manual.md`](docs/manual.md).
 
 ## Roadmap
 
-Tracked as GitHub milestones and issues (`gh issue list`, `gh api repos/metal-up-your-ass/requiem/milestones`). Planned beyond v0.1.0: a preset system with factory cathedral/hall/chamber starting points and full state recall (M2), a custom vector-drawn GUI plus an accessibility pass (current editor is a functional slider/combo/toggle layout - M3), and signed/notarized release builds (M4).
+Tracked as GitHub milestones and issues (`gh issue list`, `gh api repos/basilica-audio/requiem/milestones`). Planned beyond v0.1.0: a preset system with factory cathedral/hall/chamber starting points and full state recall (M2), a custom vector-drawn GUI plus an accessibility pass (current editor is a functional slider/combo/toggle layout - M3), and signed/notarized release builds (M4).
 <!-- ==END BODY== -->
 
 ## Installation
