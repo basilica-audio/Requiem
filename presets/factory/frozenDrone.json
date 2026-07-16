@@ -1,0 +1,21 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.requiem",
+    "pluginVersion": "0.2.0",
+    "name": "Frozen Drone",
+    "category": "Ambient",
+    "parameters": {
+        "decay": 8.0,
+        "preDelay": 20.0,
+        "damping": 4000.0,
+        "width": 140.0,
+        "mix": 60.0,
+        "output": 0.0,
+        "space": 2,
+        "earlyLateBalance": 80.0,
+        "modulation": 20.0,
+        "freeze": 1.0,
+        "size": 50.0,
+        "bassDecay": 175.0
+    }
+}

@@ -1,6 +1,9 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "params/ParameterIds.h"
+#include "presets/Localisation.h"
+
+#include <BinaryData.h>
 
 namespace
 {
@@ -11,21 +14,46 @@ namespace
     constexpr int numKnobs = 6;
     constexpr int editorWidth = margin * 2 + numKnobs * knobSize + (numKnobs - 1) * margin;
 
+    constexpr int presetBarHeight = 28;
+
     // Second row: Space combo + Early/Late Balance knob + Modulation knob +
     // Freeze toggle.
     constexpr int secondRowHeight = knobSize;
     constexpr int spaceComboWidth = 140;
     constexpr int freezeButtonWidth = 90;
 
+    // Third row (v0.2.0 additions): Size knob + Bass Decay knob.
+    constexpr int thirdRowHeight = knobSize;
+
     constexpr int irRowHeight = 30;
-    constexpr int editorHeight = margin * 4 + labelHeight + knobSize + textBoxHeight
-                                  + secondRowHeight + irRowHeight;
+    constexpr int editorHeight = margin * 6 + presetBarHeight + labelHeight + knobSize + textBoxHeight
+                                  + secondRowHeight + thirdRowHeight + irRowHeight;
+
+    // M2 i18n frame (.scaffold/specs/preset-system-m2.md): selects German
+    // (resources/i18n/de.txt) or falls through to English, once, at editor
+    // construction - see Localisation.h's docs. `presetBar` is a member
+    // initialised via the constructor's initialiser list, and its own
+    // constructor already calls TRANS() on every button label - member
+    // initialisers run in declaration order regardless of the order
+    // they're written in, so this helper (called from presetBar's own
+    // initialiser expression below) is what actually guarantees
+    // installLocalisation() runs before presetBar exists, not an
+    // installLocalisation() call in the constructor *body*, which would run
+    // too late.
+    basilica::presets::PresetManager& initLocalisationThenGetPresetManager (RequiemAudioProcessor& processor)
+    {
+        basilica::presets::installLocalisation (BinaryData::de_txt, BinaryData::de_txtSize);
+        return processor.presetManager;
+    }
 }
 
 RequiemAudioProcessorEditor::RequiemAudioProcessorEditor (RequiemAudioProcessor& processorToEdit)
     : juce::AudioProcessorEditor (&processorToEdit),
-      audioProcessor (processorToEdit)
+      audioProcessor (processorToEdit),
+      presetBar (initLocalisationThenGetPresetManager (processorToEdit))
 {
+    addAndMakeVisible (presetBar);
+
     configureKnob (decayKnob, ParamIDs::decay, "Decay");
     configureKnob (preDelayKnob, ParamIDs::preDelay, "Pre-Delay");
     configureKnob (dampingKnob, ParamIDs::damping, "Damping");
@@ -51,6 +79,9 @@ RequiemAudioProcessorEditor::RequiemAudioProcessorEditor (RequiemAudioProcessor&
 
     configureKnob (earlyLateBalanceKnob, ParamIDs::earlyLateBalance, "Early/Late");
     configureKnob (modulationKnob, ParamIDs::modulation, "Modulation");
+
+    configureKnob (sizeKnob, ParamIDs::size, "Size");
+    configureKnob (bassDecayKnob, ParamIDs::bassDecay, "Bass Decay");
 
     addAndMakeVisible (freezeButton);
     freezeAttachment = std::make_unique<ButtonAttachment> (audioProcessor.apvts, ParamIDs::freeze, freezeButton);
@@ -122,12 +153,25 @@ void RequiemAudioProcessorEditor::resized()
 {
     auto bounds = getLocalBounds().reduced (margin);
 
+    presetBar.setBounds (bounds.removeFromTop (presetBarHeight));
+    bounds.removeFromTop (margin);
+
     auto irRow = bounds.removeFromBottom (irRowHeight);
     loadIrButton.setBounds (irRow.removeFromLeft (100));
     irRow.removeFromLeft (margin / 2);
     clearIrButton.setBounds (irRow.removeFromLeft (80));
     irRow.removeFromLeft (margin / 2);
     irStatusLabel.setBounds (irRow);
+
+    bounds.removeFromBottom (margin);
+
+    // Third row (v0.2.0 additions): Size + Bass Decay.
+    auto thirdRow = bounds.removeFromBottom (thirdRowHeight);
+    thirdRow.removeFromTop (labelHeight); // room for the attached labels above these knobs
+
+    sizeKnob.slider.setBounds (thirdRow.removeFromLeft (knobSize));
+    thirdRow.removeFromLeft (margin);
+    bassDecayKnob.slider.setBounds (thirdRow.removeFromLeft (knobSize));
 
     bounds.removeFromBottom (margin);
 

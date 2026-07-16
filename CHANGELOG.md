@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-16
+
+### Added
+
+- **Research-derived deep-dive rework of the procedural impulse-response generator** (`docs/design-brief.md`/`docs/research-notes.md` - sourced from public manuals, developer interviews, trade-press reviews, and DSP/room-acoustics literature; no hardware unit or commercial plugin's actual output was measured, and no third-party impulse response was sampled or approximated):
+  - **Early-reflection density-buildup model** replaces v1's single loud tap-0-then-geometric-decay shape: reflection density now builds up over a Space/Size-scaled buildup window, then holds roughly flat energy through a flat-window handoff, before the diffuse late tail takes over - matching Griesinger's documented Lexicon 224/480L energy-time-curve principle (0-50ms carries 2-3x the energy of the following 50-150ms window at default settings).
+  - **Multiband decay** replaces v1's single static one-pole Damping filter applied uniformly across the whole tail: the tail is now split into low/mid/high bands (crossovers at ~500 Hz/~5 kHz), each with its own RT60-style decay rate, and the high band additionally gets a progressively descending cutoff so the tail measurably darkens as it decays (spectral centroid non-increasing over time) rather than holding one static filter color.
+- **Size** parameter (0-100%, default 50%): apparent size of the space, decoupled from Decay (RT60) and Space (reflection character) - scales the early-reflection buildup/flat-window timing continuously within each Space choice's own envelope.
+- **Bass Decay** parameter (25-175%, default 130%): RT60 multiplier for the low band only, relative to the mid band - bass rings measurably longer than mid/high by default, matching real-hall low-frequency-decay measurements. The high band gets an implicit (non-parameterized) ~80% RT60 multiplier.
+- **M2 preset system** (`.scaffold/specs/preset-system-m2.md`), ported from `basilica-audio/nave`'s pilot implementation: `PresetManager`/`PresetBar` (factory presets embedded via BinaryData, user presets at `~/Library/Audio/Presets/Yves Vogl/Requiem/`, default resolution, dirty-state tracking, single-file and zip-bank import/export), eleven factory presets (`docs/presets.md`), and a horizontal preset-bar strip added to the top of the editor.
+- **German localisation** of the preset system's frame strings (`resources/i18n/de.txt`), selected automatically from the system language; parameter names/units are never translated.
+- Expanded Catch2 test suite (48 -> 83 tests): the v0.2.0 DSP guarantees (early-reflection energy ratio, density-buildup monotonicity, onset invariance, Size/Decay decoupling, multiband decay ordering, Bass Decay's monotonic low-band-only effect, progressive HF-darkening spectral-centroid monotonicity, Freeze non-periodicity, tolerant v1->v2 state import, user-IR-override unaffected by the two new parameters), plus preset-system and i18n-frame tests.
+
+### Changed
+
+- Damping's role narrows to setting the tail's *terminal* high-frequency corner (the descending-cutoff filter's endpoint) rather than a single static filter applied from t=0 - see the multiband-decay rework above.
+- Freeze's finite-kernel design is explicitly reframed as a deliberate architectural choice (not a limitation): research into feedback-loop-based "infinite reverb" designs documents progressive HF-dulling and periodicity risk that a finite convolution kernel structurally cannot develop.
+- `docs/architecture.md`, `docs/manual.md` updated for the reworked DSP, the two new parameters, and the M2 preset system; `docs/presets.md` and `docs/design-brief.md`/`docs/research-notes.md` added.
+
 ## [0.1.1] - 2026-07-16
 
 ### Changed

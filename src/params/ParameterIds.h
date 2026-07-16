@@ -57,6 +57,24 @@ namespace ParamIDs
     // decay, by regenerating the impulse response with a flat envelope
     // (see ReverbIR::generateProceduralImpulseResponse's freeze parameter).
     inline constexpr auto freeze = "freeze";
+
+    // v0.2.0 additions (see docs/design-brief.md). New parameter IDs are
+    // appended here, never inserted between existing ones - see the FROZEN
+    // note above.
+
+    // Apparent size of the space, decoupled from Decay (RT60) and Space
+    // (reflection character) - scales the early-reflection buildup/flat-
+    // window timing within Space's own envelope (see
+    // ReverbIR::generateProceduralImpulseResponse's size01 parameter).
+    // Independent of Decay: sweeping Size must not measurably change RT60.
+    inline constexpr auto size = "size";
+
+    // Multiplier (25-175%) on RT60 for the low band (< ~500 Hz) only,
+    // relative to the mid band's RT60 (see
+    // ReverbIR::generateProceduralImpulseResponse's bassDecayMultiplier
+    // parameter). Bass rings longer than mid/high by default (130%),
+    // matching real-hall low-frequency decay measurements.
+    inline constexpr auto bassDecay = "bassDecay";
 }
 
 // Not an APVTS parameter (it's a string, not automatable) - the path of an

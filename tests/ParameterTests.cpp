@@ -58,15 +58,16 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
         static constexpr const char* allIds[] = {
             ParamIDs::decay, ParamIDs::preDelay, ParamIDs::damping, ParamIDs::width, ParamIDs::mix, ParamIDs::output,
             ParamIDs::space, ParamIDs::earlyLateBalance, ParamIDs::modulation, ParamIDs::freeze,
+            ParamIDs::size, ParamIDs::bassDecay,
         };
 
         for (const auto* id : allIds)
             CHECK (apvts.getParameter (id) != nullptr);
     }
 
-    SECTION ("total parameter count matches the v0.1.0 layout")
+    SECTION ("total parameter count matches the v0.2.0 layout (v0.1.0's 10 plus Size/Bass Decay)")
     {
-        CHECK (apvts.processor.getParameters().size() == 10);
+        CHECK (apvts.processor.getParameters().size() == 12);
     }
 
     SECTION ("Decay: reverb time defaults and range")
@@ -134,5 +135,17 @@ TEST_CASE ("Processor instantiates with the expected parameters", "[processor][p
         auto* param = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter (ParamIDs::freeze));
         REQUIRE (param != nullptr);
         CHECK (param->get() == false);
+    }
+
+    SECTION ("Size: defaults and range (v0.2.0)")
+    {
+        checkFloatDefault (apvts, ParamIDs::size, 50.0f);
+        checkFloatRange (apvts, ParamIDs::size, 0.0f, 100.0f);
+    }
+
+    SECTION ("Bass Decay: defaults and range (v0.2.0)")
+    {
+        checkFloatDefault (apvts, ParamIDs::bassDecay, 130.0f);
+        checkFloatRange (apvts, ParamIDs::bassDecay, 25.0f, 175.0f);
     }
 }

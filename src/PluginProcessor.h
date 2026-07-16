@@ -5,6 +5,7 @@
 #include <juce_events/juce_events.h>
 
 #include "dsp/ReverbEngine.h"
+#include "presets/PresetManager.h"
 
 // Requiem: a cinematic convolution reverb. Signal flow lives in ReverbEngine
 // (src/dsp) so it stays unit-testable independent of this AudioProcessor;
@@ -62,6 +63,16 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // M2 preset system (.scaffold/specs/preset-system-m2.md). Declared
+    // after apvts (construction order follows declaration order - see
+    // PluginProcessor.cpp's makePresetManagerConfig()/
+    // makeFactoryPresetAssets() helpers and docs/preset-system-notes.md,
+    // ported verbatim from basilica-audio/nave's pilot implementation).
+    // Public for PluginEditor's PresetBar to bind to, the same
+    // "processor owns it, editor references it" pattern apvts itself
+    // already uses.
+    basilica::presets::PresetManager presetManager;
+
 private:
     // juce::Timer callback: polls Decay/Damping for changes at a modest
     // rate and, off the audio thread, regenerates + loads a new procedural
@@ -85,6 +96,8 @@ private:
     std::atomic<float>* earlyLateBalancePercent = nullptr;
     std::atomic<float>* modulationPercent = nullptr;
     std::atomic<float>* freezeToggle = nullptr;
+    std::atomic<float>* sizePercent = nullptr;
+    std::atomic<float>* bassDecayPercent = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RequiemAudioProcessor)
 };

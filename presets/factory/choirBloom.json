@@ -1,0 +1,21 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.requiem",
+    "pluginVersion": "0.2.0",
+    "name": "Choir Bloom",
+    "category": "Choir",
+    "parameters": {
+        "decay": 5.0,
+        "preDelay": 35.0,
+        "damping": 5500.0,
+        "width": 100.0,
+        "mix": 45.0,
+        "output": 0.0,
+        "space": 0,
+        "earlyLateBalance": 95.0,
+        "modulation": 0.0,
+        "freeze": 0.0,
+        "size": 90.0,
+        "bassDecay": 140.0
+    }
+}

@@ -269,3 +269,122 @@ TEST_CASE ("Robust user-IR loading: a file longer than maxUserImpulseResponseSec
 
     file.deleteFile();
 }
+
+//==============================================================================
+// v0.2.0 guarantee #9 (docs/design-brief.md): tolerant v1 -> v2 state
+// import - unknown/removed v1 param IDs ignored (not applicable here, v1
+// had no extra IDs v2 removed), size/bassDecay default to their v2 defaults
+// when absent from a loaded v1 state, consistent with the
+// AudioProcessorValueTreeState tolerant-load behaviour already relied on
+// elsewhere in the suite.
+TEST_CASE ("Tolerant v1->v2 state import: missing Size/Bass Decay default to their v2 defaults", "[state][v2]")
+{
+    RequiemAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+
+    // Perturb Decay away from its default so the "rest of the v1 state
+    // still loads correctly" half of this test is meaningful too.
+    auto* decayParam = processor.apvts.getParameter (ParamIDs::decay);
+    REQUIRE (decayParam != nullptr);
+    decayParam->setValueNotifyingHost (decayParam->convertTo0to1 (6.0f));
+
+    const auto state = processor.apvts.copyState();
+    const std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    REQUIRE (xml != nullptr);
+
+    // Simulate a genuine v0.1.x-era saved state: APVTS persists each
+    // parameter as a <PARAM id="..." value="..."/> child element - removing
+    // Size/Bass Decay's elements reproduces exactly what a v1 session file
+    // (which never had these two parameters) looks like.
+    for (int i = xml->getNumChildElements() - 1; i >= 0; --i)
+    {
+        auto* child = xml->getChildElement (i);
+
+        if (child->hasTagName ("PARAM"))
+        {
+            const auto id = child->getStringAttribute ("id");
+
+            if (id == juce::String (ParamIDs::size) || id == juce::String (ParamIDs::bassDecay))
+                xml->removeChildElement (child, true);
+        }
+    }
+
+    juce::MemoryBlock v1StyleState;
+    juce::AudioProcessor::copyXmlToBinary (*xml, v1StyleState);
+
+    RequiemAudioProcessor restoredProcessor;
+    restoredProcessor.prepareToPlay (48000.0, 512);
+
+    CHECK_NOTHROW (restoredProcessor.setStateInformation (v1StyleState.getData(), static_cast<int> (v1StyleState.getSize())));
+
+    auto* restoredDecay = restoredProcessor.apvts.getParameter (ParamIDs::decay);
+    auto* restoredSize = restoredProcessor.apvts.getParameter (ParamIDs::size);
+    auto* restoredBassDecay = restoredProcessor.apvts.getParameter (ParamIDs::bassDecay);
+    REQUIRE (restoredDecay != nullptr);
+    REQUIRE (restoredSize != nullptr);
+    REQUIRE (restoredBassDecay != nullptr);
+
+    // The rest of the v1 state still loaded correctly...
+    CHECK (restoredDecay->convertFrom0to1 (restoredDecay->getValue()) == Catch::Approx (6.0f).margin (1.0e-3));
+
+    // ...and the two new v2 parameters, absent from the v1 XML, resolved to
+    // their ParameterLayout defaults rather than crashing or reading
+    // garbage.
+    CHECK (restoredSize->convertFrom0to1 (restoredSize->getValue()) == Catch::Approx (50.0f).margin (1.0e-3));
+    CHECK (restoredBassDecay->convertFrom0to1 (restoredBassDecay->getValue()) == Catch::Approx (130.0f).margin (1.0e-3));
+}
+
+TEST_CASE ("User IR override unaffected: Size and Bass Decay have zero effect on output while a user IR is active",
+           "[state][v2]")
+{
+    const auto irFile = writeTestImpulseResponseFile();
+
+    RequiemAudioProcessor processorA;
+    processorA.prepareToPlay (48000.0, 512);
+    REQUIRE (processorA.loadUserImpulseResponseFile (irFile));
+
+    RequiemAudioProcessor processorB;
+    processorB.prepareToPlay (48000.0, 512);
+    REQUIRE (processorB.loadUserImpulseResponseFile (irFile));
+
+    auto* sizeParamA = processorA.apvts.getParameter (ParamIDs::size);
+    auto* bassDecayParamA = processorA.apvts.getParameter (ParamIDs::bassDecay);
+    REQUIRE (sizeParamA != nullptr);
+    REQUIRE (bassDecayParamA != nullptr);
+    sizeParamA->setValueNotifyingHost (sizeParamA->convertTo0to1 (0.0f));
+    bassDecayParamA->setValueNotifyingHost (bassDecayParamA->convertTo0to1 (25.0f));
+
+    auto* sizeParamB = processorB.apvts.getParameter (ParamIDs::size);
+    auto* bassDecayParamB = processorB.apvts.getParameter (ParamIDs::bassDecay);
+    REQUIRE (sizeParamB != nullptr);
+    REQUIRE (bassDecayParamB != nullptr);
+    sizeParamB->setValueNotifyingHost (sizeParamB->convertTo0to1 (100.0f));
+    bassDecayParamB->setValueNotifyingHost (bassDecayParamB->convertTo0to1 (175.0f));
+
+    // Let the message-thread timer actually run
+    // (regenerateImpulseResponseIfNeeded() is a no-op while
+    // usingUserImpulseResponse is true, per ReverbEngine's own gate) so
+    // this test would fail if that gate were ever removed/bypassed for the
+    // two new v0.2.0 parameters specifically.
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+
+    juce::AudioBuffer<float> bufferA (2, 512);
+    juce::AudioBuffer<float> bufferB (2, 512);
+    TestHelpers::fillWithSine (bufferA, 48000.0, 500.0, 0.5f);
+    TestHelpers::fillWithSine (bufferB, 48000.0, 500.0, 0.5f);
+
+    juce::MidiBuffer midi;
+    processorA.processBlock (bufferA, midi);
+    processorB.processBlock (bufferB, midi);
+
+    for (int channel = 0; channel < bufferA.getNumChannels(); ++channel)
+    {
+        const auto* a = bufferA.getReadPointer (channel);
+        const auto* b = bufferB.getReadPointer (channel);
+
+        for (int i = 0; i < bufferA.getNumSamples(); ++i)
+            CHECK (a[i] == Catch::Approx (b[i]).margin (1.0e-7));
+    }
+
+    irFile.deleteFile();
+}

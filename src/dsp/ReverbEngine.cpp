@@ -51,7 +51,9 @@ void ReverbEngine::prepare (const juce::dsp::ProcessSpec& spec)
                                                       requestedDampingHz.load (std::memory_order_relaxed),
                                                       static_cast<ReverbIR::SpaceType> (requestedSpace.load (std::memory_order_relaxed)),
                                                       requestedEarlyLateBalance01.load (std::memory_order_relaxed),
-                                                      requestedFreeze.load (std::memory_order_relaxed));
+                                                      requestedFreeze.load (std::memory_order_relaxed),
+                                                      requestedSize01.load (std::memory_order_relaxed),
+                                                      requestedBassDecayMultiplier.load (std::memory_order_relaxed));
     }
 
     convolution.prepare (spec);
@@ -191,6 +193,16 @@ void ReverbEngine::setFreeze (bool shouldFreeze)
     requestedFreeze.store (shouldFreeze, std::memory_order_relaxed);
 }
 
+void ReverbEngine::setSize (float newSize01)
+{
+    requestedSize01.store (newSize01, std::memory_order_relaxed);
+}
+
+void ReverbEngine::setBassDecayMultiplier (float newBassDecayMultiplier)
+{
+    requestedBassDecayMultiplier.store (newBassDecayMultiplier, std::memory_order_relaxed);
+}
+
 void ReverbEngine::regenerateImpulseResponseIfNeeded()
 {
     if (usingUserImpulseResponse)
@@ -201,6 +213,8 @@ void ReverbEngine::regenerateImpulseResponseIfNeeded()
     const auto space = static_cast<ReverbIR::SpaceType> (requestedSpace.load (std::memory_order_relaxed));
     const auto earlyLateBalance = requestedEarlyLateBalance01.load (std::memory_order_relaxed);
     const auto freeze = requestedFreeze.load (std::memory_order_relaxed);
+    const auto size01 = requestedSize01.load (std::memory_order_relaxed);
+    const auto bassDecayMultiplier = requestedBassDecayMultiplier.load (std::memory_order_relaxed);
 
     // Small epsilon avoids reloading on floating-point noise from repeated
     // identical parameter pushes (e.g. a host re-sending the same
@@ -212,11 +226,14 @@ void ReverbEngine::regenerateImpulseResponseIfNeeded()
     const auto spaceChanged = space != lastGeneratedSpace;
     const auto balanceChanged = std::abs (earlyLateBalance - lastGeneratedEarlyLateBalance01) >= epsilon;
     const auto freezeChanged = freeze != lastGeneratedFreeze;
+    const auto sizeChanged = std::abs (size01 - lastGeneratedSize01) >= epsilon;
+    const auto bassDecayChanged = std::abs (bassDecayMultiplier - lastGeneratedBassDecayMultiplier) >= epsilon;
 
-    if (! decayChanged && ! dampingChanged && ! spaceChanged && ! balanceChanged && ! freezeChanged)
+    if (! decayChanged && ! dampingChanged && ! spaceChanged && ! balanceChanged && ! freezeChanged
+        && ! sizeChanged && ! bassDecayChanged)
         return;
 
-    queueProceduralImpulseResponse (decay, damping, space, earlyLateBalance, freeze);
+    queueProceduralImpulseResponse (decay, damping, space, earlyLateBalance, freeze, size01, bassDecayMultiplier);
 }
 
 bool ReverbEngine::loadUserImpulseResponse (const juce::File& file)
@@ -273,14 +290,18 @@ void ReverbEngine::clearUserImpulseResponse()
                                      requestedDampingHz.load (std::memory_order_relaxed),
                                      static_cast<ReverbIR::SpaceType> (requestedSpace.load (std::memory_order_relaxed)),
                                      requestedEarlyLateBalance01.load (std::memory_order_relaxed),
-                                     requestedFreeze.load (std::memory_order_relaxed));
+                                     requestedFreeze.load (std::memory_order_relaxed),
+                                     requestedSize01.load (std::memory_order_relaxed),
+                                     requestedBassDecayMultiplier.load (std::memory_order_relaxed));
 }
 
 void ReverbEngine::loadProceduralImpulseResponseSynchronously (float decaySeconds, float dampingHz,
-                                                                 ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze)
+                                                                 ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze,
+                                                                 float size01, float bassDecayMultiplier)
 {
     auto impulseResponse = ReverbIR::generateProceduralImpulseResponse (sampleRate, decaySeconds, dampingHz, numChannels,
-                                                                          space, earlyLateBalance01, freeze);
+                                                                          space, earlyLateBalance01, freeze, 1,
+                                                                          size01, bassDecayMultiplier);
 
     const auto stereo = numChannels >= 2 ? juce::dsp::Convolution::Stereo::yes
                                           : juce::dsp::Convolution::Stereo::no;
@@ -294,16 +315,20 @@ void ReverbEngine::loadProceduralImpulseResponseSynchronously (float decaySecond
     lastGeneratedSpace = space;
     lastGeneratedEarlyLateBalance01 = earlyLateBalance01;
     lastGeneratedFreeze = freeze;
+    lastGeneratedSize01 = size01;
+    lastGeneratedBassDecayMultiplier = bassDecayMultiplier;
 }
 
 void ReverbEngine::queueProceduralImpulseResponse (float decaySeconds, float dampingHz,
-                                                     ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze)
+                                                     ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze,
+                                                     float size01, float bassDecayMultiplier)
 {
     // The non-real-time-safe part (heap allocation, per-sample exp()/random
     // calls) happens here, on the message thread, exactly as before -
     // building `impulseResponse` doesn't touch the audio thread at all.
     auto impulseResponse = ReverbIR::generateProceduralImpulseResponse (sampleRate, decaySeconds, dampingHz, numChannels,
-                                                                          space, earlyLateBalance01, freeze);
+                                                                          space, earlyLateBalance01, freeze, 1,
+                                                                          size01, bassDecayMultiplier);
 
     // Hand the finished buffer off for process() to actually load on the
     // audio thread (see the class comment's "Threading" section). The
@@ -322,6 +347,8 @@ void ReverbEngine::queueProceduralImpulseResponse (float decaySeconds, float dam
     lastGeneratedSpace = space;
     lastGeneratedEarlyLateBalance01 = earlyLateBalance01;
     lastGeneratedFreeze = freeze;
+    lastGeneratedSize01 = size01;
+    lastGeneratedBassDecayMultiplier = bassDecayMultiplier;
 }
 
 void ReverbEngine::applyPendingImpulseResponseIfAny() noexcept

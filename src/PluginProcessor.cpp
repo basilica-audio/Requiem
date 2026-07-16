@@ -3,6 +3,8 @@
 #include "params/ParameterIds.h"
 #include "params/ParameterLayout.h"
 
+#include <BinaryData.h>
+
 #include <cmath>
 
 namespace
@@ -13,6 +15,53 @@ namespace
     // slow enough to avoid reloading (and re-normalising) a multi-second IR
     // dozens of times a second while a slider is being dragged.
     constexpr int impulseResponseTimerHz = 20;
+
+    //==========================================================================
+    // M2 preset system (.scaffold/specs/preset-system-m2.md) - ported
+    // verbatim from basilica-audio/nave's pilot implementation, see
+    // docs/preset-system-notes.md's replication recipe.
+    basilica::presets::PresetManagerConfig makePresetManagerConfig()
+    {
+        // JucePlugin_CFBundleIdentifier expands to a raw (unquoted) token
+        // sequence, not a string literal - JUCE_STRINGIFY() is the
+        // documented way to turn it into one (see JUCE's own
+        // juce_CoreMidi_mac.mm for the same pattern). This is always
+        // "com.yvesvogl.requiem" here (BUNDLE_ID in CMakeLists.txt),
+        // matching the "plugin" field baked into every presets/factory/
+        // *.json file.
+        basilica::presets::PresetManagerConfig config;
+        config.pluginId = JUCE_STRINGIFY (JucePlugin_CFBundleIdentifier);
+        config.pluginName = JucePlugin_Name;
+        config.manufacturerName = "Yves Vogl";
+        config.pluginVersion = JucePlugin_VersionString;
+        // userPresetsDirectoryOverrideForTests intentionally left
+        // default-constructed (empty) - production instances always use the
+        // real platform-standard preset location (see PresetManager.h).
+        return config;
+    }
+
+    // BinaryData symbol names are derived from the presets/factory/*.json
+    // file names passed to juce_add_binary_data() in CMakeLists.txt (dots
+    // become underscores) - this list must stay in sync with that SOURCES
+    // list. Order here only affects factory-preset iteration order before
+    // getAllPresets() re-sorts alphabetically, so it isn't otherwise
+    // significant.
+    std::vector<basilica::presets::FactoryPresetAsset> makeFactoryPresetAssets()
+    {
+        return {
+            { BinaryData::default_json, BinaryData::default_jsonSize },
+            { BinaryData::cathedralWash_json, BinaryData::cathedralWash_jsonSize },
+            { BinaryData::concertHall_json, BinaryData::concertHall_jsonSize },
+            { BinaryData::chamberRoom_json, BinaryData::chamberRoom_jsonSize },
+            { BinaryData::choirBloom_json, BinaryData::choirBloom_jsonSize },
+            { BinaryData::tightRhythmicHall_json, BinaryData::tightRhythmicHall_jsonSize },
+            { BinaryData::frozenDrone_json, BinaryData::frozenDrone_jsonSize },
+            { BinaryData::darkSanctuary_json, BinaryData::darkSanctuary_jsonSize },
+            { BinaryData::brightSlapChamber_json, BinaryData::brightSlapChamber_jsonSize },
+            { BinaryData::fullWetSendHall_json, BinaryData::fullWetSendHall_jsonSize },
+            { BinaryData::subtleAir_json, BinaryData::subtleAir_jsonSize },
+        };
+    }
 }
 
 //==============================================================================
@@ -20,7 +69,8 @@ RequiemAudioProcessor::RequiemAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
+      apvts (*this, nullptr, "PARAMETERS", createParameterLayout()),
+      presetManager (apvts, makePresetManagerConfig(), makeFactoryPresetAssets())
 {
     decaySeconds = apvts.getRawParameterValue (ParamIDs::decay);
     preDelayMs = apvts.getRawParameterValue (ParamIDs::preDelay);
@@ -32,6 +82,8 @@ RequiemAudioProcessor::RequiemAudioProcessor()
     earlyLateBalancePercent = apvts.getRawParameterValue (ParamIDs::earlyLateBalance);
     modulationPercent = apvts.getRawParameterValue (ParamIDs::modulation);
     freezeToggle = apvts.getRawParameterValue (ParamIDs::freeze);
+    sizePercent = apvts.getRawParameterValue (ParamIDs::size);
+    bassDecayPercent = apvts.getRawParameterValue (ParamIDs::bassDecay);
 
     jassert (decaySeconds != nullptr);
     jassert (preDelayMs != nullptr);
@@ -43,6 +95,14 @@ RequiemAudioProcessor::RequiemAudioProcessor()
     jassert (earlyLateBalancePercent != nullptr);
     jassert (modulationPercent != nullptr);
     jassert (freezeToggle != nullptr);
+    jassert (sizePercent != nullptr);
+    jassert (bassDecayPercent != nullptr);
+
+    // Resolves the default-resolution order (user "Default" preset >
+    // factory "Default" preset > the ParameterLayout defaults already set
+    // up above by APVTS's own constructor) - see PresetManager::
+    // applyStartupDefault()'s docs.
+    presetManager.applyStartupDefault();
 }
 
 RequiemAudioProcessor::~RequiemAudioProcessor()
@@ -137,6 +197,8 @@ void RequiemAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
     engine.setModulationAmount (modulationPercent->load (std::memory_order_relaxed) * 0.01f);
     // AudioParameterBool exposes its raw APVTS value as 0.0f/1.0f.
     engine.setFreeze (freezeToggle->load (std::memory_order_relaxed) >= 0.5f);
+    engine.setSize (sizePercent->load (std::memory_order_relaxed) * 0.01f);
+    engine.setBassDecayMultiplier (bassDecayPercent->load (std::memory_order_relaxed) * 0.01f);
 
     engine.prepare (spec);
 
@@ -205,6 +267,8 @@ void RequiemAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     engine.setModulationAmount (modulationPercent->load (std::memory_order_relaxed) * 0.01f);
     // AudioParameterBool exposes its raw APVTS value as 0.0f/1.0f.
     engine.setFreeze (freezeToggle->load (std::memory_order_relaxed) >= 0.5f);
+    engine.setSize (sizePercent->load (std::memory_order_relaxed) * 0.01f);
+    engine.setBassDecayMultiplier (bassDecayPercent->load (std::memory_order_relaxed) * 0.01f);
 
     juce::dsp::AudioBlock<float> block (buffer);
     engine.process (block);

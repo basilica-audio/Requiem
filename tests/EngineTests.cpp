@@ -240,6 +240,39 @@ TEST_CASE ("regenerateImpulseResponseIfNeeded() also reacts to Space/Early-Late-
     processAndCheckFinite();
 }
 
+TEST_CASE ("regenerateImpulseResponseIfNeeded() also reacts to Size/Bass Decay changes (v0.2.0)", "[dsp][engine][v2]")
+{
+    ReverbEngine engine;
+    engine.setDecaySeconds (1.5f);
+    engine.setDampingHz (8000.0f);
+
+    const auto spec = makeTestSpec (2);
+    engine.prepare (spec);
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::dsp::AudioBlock<float> block (buffer);
+
+    auto processAndCheckFinite = [&]
+    {
+        TestHelpers::fillWithSine (buffer, testSampleRate, testFrequencyHz, 0.5f);
+        CHECK_NOTHROW (engine.process (block));
+        CHECK (TestHelpers::allSamplesFinite (buffer));
+    };
+
+    engine.setSize (1.0f);
+    CHECK_NOTHROW (engine.regenerateImpulseResponseIfNeeded());
+    processAndCheckFinite();
+
+    engine.setBassDecayMultiplier (ReverbIR::maxBassDecayMultiplier);
+    CHECK_NOTHROW (engine.regenerateImpulseResponseIfNeeded());
+    processAndCheckFinite();
+
+    engine.setSize (0.0f);
+    engine.setBassDecayMultiplier (ReverbIR::minBassDecayMultiplier);
+    CHECK_NOTHROW (engine.regenerateImpulseResponseIfNeeded());
+    processAndCheckFinite();
+}
+
 TEST_CASE ("Freeze sustains the wet tail's energy well past the non-frozen tail's decay", "[dsp][engine]")
 {
     // decaySeconds also sizes the generated IR (impulse-response length ==

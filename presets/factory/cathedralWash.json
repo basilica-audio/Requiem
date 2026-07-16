@@ -1,0 +1,21 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.requiem",
+    "pluginVersion": "0.2.0",
+    "name": "Cathedral Wash",
+    "category": "Orchestral",
+    "parameters": {
+        "decay": 6.5,
+        "preDelay": 20.0,
+        "damping": 6500.0,
+        "width": 100.0,
+        "mix": 40.0,
+        "output": 0.0,
+        "space": 0,
+        "earlyLateBalance": 90.0,
+        "modulation": 0.0,
+        "freeze": 0.0,
+        "size": 85.0,
+        "bassDecay": 150.0
+    }
+}

@@ -3,6 +3,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "presets/PresetBar.h"
+
 class RequiemAudioProcessor;
 
 // A simple, functional v0.1 editor: one rotary slider per parameter, bound
@@ -36,6 +38,13 @@ private:
 
     RequiemAudioProcessor& audioProcessor;
 
+    // M2 preset system (.scaffold/specs/preset-system-m2.md). Declared
+    // first among the visible components so its initialiser (which also
+    // installs the i18n frame - see PluginEditor.cpp's
+    // initLocalisationThenGetPresetManager()) runs before any other
+    // component that calls TRANS() on its own labels.
+    basilica::presets::PresetBar presetBar;
+
     Knob decayKnob;
     Knob preDelayKnob;
     Knob dampingKnob;
@@ -53,6 +62,10 @@ private:
 
     Knob earlyLateBalanceKnob;
     Knob modulationKnob;
+
+    // v0.2.0 additions (see docs/design-brief.md): a third row.
+    Knob sizeKnob;
+    Knob bassDecayKnob;
 
     juce::ToggleButton freezeButton { "Freeze" };
     std::unique_ptr<ButtonAttachment> freezeAttachment;

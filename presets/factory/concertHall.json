@@ -1,0 +1,21 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.requiem",
+    "pluginVersion": "0.2.0",
+    "name": "Concert Hall",
+    "category": "Orchestral",
+    "parameters": {
+        "decay": 2.2,
+        "preDelay": 20.0,
+        "damping": 9000.0,
+        "width": 100.0,
+        "mix": 30.0,
+        "output": 0.0,
+        "space": 1,
+        "earlyLateBalance": 80.0,
+        "modulation": 0.0,
+        "freeze": 0.0,
+        "size": 50.0,
+        "bassDecay": 125.0
+    }
+}

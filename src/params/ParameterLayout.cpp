@@ -131,6 +131,29 @@ namespace rqm
             "Freeze",
             false));
 
+        //======================================================================
+        // v0.2.0 additions (see docs/design-brief.md) - appended after the
+        // v0.1.0/M1 parameters, never inserted between them (ParameterIds.h
+        // "FROZEN" note).
+
+        // Size: apparent size of the space, decoupled from Decay (RT60) and
+        // Space (reflection character). Default 50%.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::size, 1 },
+            "Size",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            50.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        // Bass Decay: RT60 multiplier for the low band only, 25-175%,
+        // default 130% (bass rings measurably longer than mid/high).
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::bassDecay, 1 },
+            "Bass Decay",
+            juce::NormalisableRange<float> (25.0f, 175.0f, 0.1f),
+            130.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
         return layout;
     }
 }

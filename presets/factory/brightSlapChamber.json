@@ -1,0 +1,21 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.requiem",
+    "pluginVersion": "0.2.0",
+    "name": "Bright Slap Chamber",
+    "category": "Orchestral",
+    "parameters": {
+        "decay": 0.6,
+        "preDelay": 20.0,
+        "damping": 16000.0,
+        "width": 100.0,
+        "mix": 20.0,
+        "output": 0.0,
+        "space": 2,
+        "earlyLateBalance": 20.0,
+        "modulation": 0.0,
+        "freeze": 0.0,
+        "size": 15.0,
+        "bassDecay": 100.0
+    }
+}

@@ -1,0 +1,21 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.requiem",
+    "pluginVersion": "0.2.0",
+    "name": "Chamber Room",
+    "category": "Orchestral",
+    "parameters": {
+        "decay": 1.0,
+        "preDelay": 20.0,
+        "damping": 11000.0,
+        "width": 100.0,
+        "mix": 25.0,
+        "output": 0.0,
+        "space": 2,
+        "earlyLateBalance": 70.0,
+        "modulation": 0.0,
+        "freeze": 0.0,
+        "size": 25.0,
+        "bassDecay": 110.0
+    }
+}

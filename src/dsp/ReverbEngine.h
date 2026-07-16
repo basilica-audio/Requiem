@@ -100,14 +100,21 @@ public:
     void setEarlyLateBalance (float newBalance01);
     void setFreeze (bool shouldFreeze);
 
+    // v0.2.0 additions (see docs/design-brief.md) - same real-time-safety
+    // contract as the setters above: only ever store the requested value in
+    // an atomic, never regenerate directly.
+    void setSize (float newSize01);
+    void setBassDecayMultiplier (float newBassDecayMultiplier);
+
     // Message-thread only. Regenerates a new procedural impulse response
     // (off the audio thread - allocates, does per-sample generation work)
-    // if any of Decay/Damping/Space/Early-Late-Balance/Freeze have changed
-    // since the last generated IR, and no user IR override is currently
-    // active, and hands it off to process() to actually load into
-    // juce::dsp::Convolution on the audio thread (see the class comment's
-    // "Threading" section). A cheap no-op otherwise, so it is safe to call
-    // frequently (e.g. from a ~20 Hz juce::Timer in PluginProcessor).
+    // if any of Decay/Damping/Space/Early-Late-Balance/Freeze/Size/
+    // BassDecay have changed since the last generated IR, and no user IR
+    // override is currently active, and hands it off to process() to
+    // actually load into juce::dsp::Convolution on the audio thread (see
+    // the class comment's "Threading" section). A cheap no-op otherwise, so
+    // it is safe to call frequently (e.g. from a ~20 Hz juce::Timer in
+    // PluginProcessor).
     void regenerateImpulseResponseIfNeeded();
 
     // Message-thread only. Validates a user-supplied impulse-response audio
@@ -155,13 +162,15 @@ private:
     // "Threading" section). Generates the procedural IR and loads it into
     // convolution directly.
     void loadProceduralImpulseResponseSynchronously (float decaySeconds, float dampingHz,
-                                                       ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze);
+                                                       ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze,
+                                                       float size01, float bassDecayMultiplier);
 
     // Message-thread only. Generates the procedural IR (the non-real-time-
     // safe part) and hands it off via pendingImpulseResponse for process()
     // to actually load, on the audio thread.
     void queueProceduralImpulseResponse (float decaySeconds, float dampingHz,
-                                          ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze);
+                                          ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze,
+                                          float size01, float bassDecayMultiplier);
 
     // Audio-thread only, called once at the top of every process(). Applies
     // (i.e. calls convolution.loadImpulseResponse()) whatever request the
@@ -234,12 +243,16 @@ private:
     std::atomic<int> requestedSpace { static_cast<int> (ReverbIR::SpaceType::hall) };
     std::atomic<float> requestedEarlyLateBalance01 { 0.8f };
     std::atomic<bool> requestedFreeze { false };
+    std::atomic<float> requestedSize01 { ReverbIR::defaultSize01 };
+    std::atomic<float> requestedBassDecayMultiplier { ReverbIR::defaultBassDecayMultiplier };
 
     float lastGeneratedDecaySeconds = -1.0f; // forces generation on first prepare()
     float lastGeneratedDampingHz = -1.0f;
     ReverbIR::SpaceType lastGeneratedSpace = ReverbIR::SpaceType::hall;
     float lastGeneratedEarlyLateBalance01 = 0.8f;
     bool lastGeneratedFreeze = false;
+    float lastGeneratedSize01 = -1.0f; // forces generation on first prepare()
+    float lastGeneratedBassDecayMultiplier = -1.0f;
 
     bool usingUserImpulseResponse = false;
     juce::File userImpulseResponseFile;
