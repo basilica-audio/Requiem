@@ -24,14 +24,30 @@
 // the Decay/Damping/Space/Early-Late-Balance/Freeze parameters, or - if a
 // user IR has been loaded - read from an audio file. Decay/Damping/Space/
 // Early-Late-Balance/Freeze changes only ever update an atomic "requested
-// value"; the actual (re)generation and
-// juce::dsp::Convolution::loadImpulseResponse call happens only inside
+// value"; the actual (re)generation happens on the message thread, inside
 // regenerateImpulseResponseIfNeeded()/loadUserImpulseResponse(), which the
-// owning PluginProcessor calls from a message-thread juce::Timer - never
-// from process(). This is the "ROBUSTNESS first" v0.1 approach called out
-// in the DSP spec: no attempt is made to interpolate/crossfade between old
-// and new IRs beyond whatever juce::dsp::Convolution itself does internally
-// when a new IR is loaded while processing continues.
+// owning PluginProcessor calls from a message-thread juce::Timer/FileChooser
+// callback - never from process(). This is the "ROBUSTNESS first" v0.1
+// approach called out in the DSP spec: no attempt is made to interpolate/
+// crossfade between old and new IRs beyond whatever juce::dsp::Convolution
+// itself does internally when a new IR is loaded while processing
+// continues.
+//
+// Threading (JUCE 8.0.14 juce_dsp/frequency/juce_Convolution.h, "Threading"):
+// "It is not safe to interleave calls to the methods of this class. If you
+// need to load new impulse responses during processing the load() calls
+// must be synchronised with process() calls, which in practice means making
+// the load() call from the audio thread." Accordingly,
+// juce::dsp::Convolution::loadImpulseResponse() is called *only* from
+// process() (the audio thread) here - regenerateImpulseResponseIfNeeded()/
+// loadUserImpulseResponse()/clearUserImpulseResponse() only ever prepare a
+// request (generating the procedural buffer, or validating a candidate user
+// IR file - both real work, neither real-time safe) and hand it off through
+// a SpinLock-guarded slot (see applyPendingImpulseResponseIfAny()) for
+// process() to pick up and load on its own thread, wait-free, on the next
+// call. The one exception is prepare() (called from prepareToPlay(), always
+// with processing suspended per the host/JUCE contract - there is no
+// concurrent process() call to race), which still loads directly.
 class ReverbEngine
 {
 public:
@@ -84,27 +100,33 @@ public:
     void setEarlyLateBalance (float newBalance01);
     void setFreeze (bool shouldFreeze);
 
-    // Message-thread only. Regenerates and loads a new procedural impulse
-    // response if any of Decay/Damping/Space/Early-Late-Balance/Freeze have
-    // changed since the last generated IR, and no user IR override is
-    // currently active. A cheap no-op otherwise, so it is safe to call
+    // Message-thread only. Regenerates a new procedural impulse response
+    // (off the audio thread - allocates, does per-sample generation work)
+    // if any of Decay/Damping/Space/Early-Late-Balance/Freeze have changed
+    // since the last generated IR, and no user IR override is currently
+    // active, and hands it off to process() to actually load into
+    // juce::dsp::Convolution on the audio thread (see the class comment's
+    // "Threading" section). A cheap no-op otherwise, so it is safe to call
     // frequently (e.g. from a ~20 Hz juce::Timer in PluginProcessor).
     void regenerateImpulseResponseIfNeeded();
 
-    // Message-thread only. Loads a user-supplied impulse-response audio
+    // Message-thread only. Validates a user-supplied impulse-response audio
     // file (WAV/AIFF/etc, anything juce::AudioFormatManager's basic formats
-    // support), overriding the procedural generator until
-    // clearUserImpulseResponse() is called. Returns false, without changing
-    // any state, if the file doesn't exist, isn't readable as valid audio
-    // (a format-reader sanity check runs before anything is handed to
-    // juce::dsp::Convolution), or exceeds maxUserImpulseResponseSeconds -
-    // guarding against a pathologically long "IR" file driving convolution
-    // CPU/memory far outside what a real captured space would ever need.
+    // support) and, if valid, hands it off to process() to actually load
+    // into juce::dsp::Convolution on the audio thread (see the class
+    // comment's "Threading" section), overriding the procedural generator
+    // until clearUserImpulseResponse() is called. Returns false, without
+    // changing any state, if the file doesn't exist, isn't readable as
+    // valid audio (a format-reader sanity check runs before anything is
+    // handed to juce::dsp::Convolution), or exceeds
+    // maxUserImpulseResponseSeconds - guarding against a pathologically
+    // long "IR" file driving convolution CPU/memory far outside what a real
+    // captured space would ever need.
     bool loadUserImpulseResponse (const juce::File& file);
 
     // Message-thread only. Reverts to the procedural generator, discarding
-    // any active user IR override, and forces the next
-    // regenerateImpulseResponseIfNeeded() call to reload.
+    // any active user IR override, and queues a fresh procedural IR the
+    // same way regenerateImpulseResponseIfNeeded() does.
     void clearUserImpulseResponse();
 
     bool isUsingUserImpulseResponse() const noexcept { return usingUserImpulseResponse; }
@@ -128,8 +150,32 @@ public:
     int getLatencySamples() const noexcept { return latencySamples; }
 
 private:
-    void loadProceduralImpulseResponse (float decaySeconds, float dampingHz,
-                                         ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze);
+    // Message-thread only (called from prepare(), where there is no
+    // concurrent process() call to race - see the class comment's
+    // "Threading" section). Generates the procedural IR and loads it into
+    // convolution directly.
+    void loadProceduralImpulseResponseSynchronously (float decaySeconds, float dampingHz,
+                                                       ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze);
+
+    // Message-thread only. Generates the procedural IR (the non-real-time-
+    // safe part) and hands it off via pendingImpulseResponse for process()
+    // to actually load, on the audio thread.
+    void queueProceduralImpulseResponse (float decaySeconds, float dampingHz,
+                                          ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze);
+
+    // Audio-thread only, called once at the top of every process(). Applies
+    // (i.e. calls convolution.loadImpulseResponse()) whatever request the
+    // message thread most recently queued via queueProceduralImpulseResponse()
+    // /loadUserImpulseResponse(), if any - this is the only place
+    // convolution.loadImpulseResponse() is ever called outside prepare(),
+    // satisfying juce::dsp::Convolution's own threading contract (see the
+    // class comment above). Never blocks: uses a try-lock, so if the
+    // message thread happens to be mid-update (a vanishingly short window -
+    // see pendingImpulseResponseLock's doc comment) this simply tries again
+    // on the very next block, still far faster than the ~20 Hz cadence
+    // requests arrive at.
+    void applyPendingImpulseResponseIfAny() noexcept;
+
     void applyWidth (juce::dsp::AudioBlock<float>& block) noexcept;
 
     static float mapModulationDepth (float amount01) noexcept;
@@ -205,6 +251,35 @@ private:
     juce::AudioFormatManager userIrFormatManager;
 
     int latencySamples = 0;
+
+    // See "Threading" in the class comment above. The message thread only
+    // ever holds pendingImpulseResponseLock for a short, non-allocating
+    // struct/pointer swap (the expensive work - procedural generation,
+    // file-format validation - happens before the lock is taken); the audio
+    // thread only ever *tries* the lock, once per process() call, and never
+    // blocks. This is exactly the pattern juce::dsp::Convolution's own
+    // AudioBuffer-taking loadImpulseResponse() overload recommends for
+    // handing a buffer to the audio thread without allocating there: "...
+    // use some wait-free construct (a lock-free queue or a SpinLock/
+    // GenericScopedTryLock combination) to transfer ownership to the audio
+    // thread without allocating."
+    enum class PendingImpulseResponseKind
+    {
+        none,
+        procedural,
+        userFile,
+    };
+
+    struct PendingImpulseResponse
+    {
+        PendingImpulseResponseKind kind = PendingImpulseResponseKind::none;
+        juce::AudioBuffer<float> proceduralBuffer;
+        double proceduralSampleRate = 0.0;
+        juce::File userFile;
+    };
+
+    juce::SpinLock pendingImpulseResponseLock;
+    PendingImpulseResponse pendingImpulseResponse;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ReverbEngine)
 };

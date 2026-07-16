@@ -10,6 +10,15 @@ void ReverbEngine::prepare (const juce::dsp::ProcessSpec& spec)
     sampleRate = spec.sampleRate;
     numChannels = static_cast<int> (spec.numChannels);
 
+    // Discard any request queued by a previous session's Timer/FileChooser
+    // callback before it could be applied (e.g. a sample-rate change came
+    // in first) - a stale procedural buffer would be sized/sampled for the
+    // old rate, and process() hasn't run since to have consumed it anyway.
+    {
+        const juce::SpinLock::ScopedLockType lock (pendingImpulseResponseLock);
+        pendingImpulseResponse = PendingImpulseResponse {};
+    }
+
     const auto stereo = numChannels >= 2 ? juce::dsp::Convolution::Stereo::yes
                                           : juce::dsp::Convolution::Stereo::no;
 
@@ -18,7 +27,12 @@ void ReverbEngine::prepare (const juce::dsp::ProcessSpec& spec)
     // ordering ("it is recommended to call loadImpulseResponse() *before*
     // prepare() if a specific IR must be active during the first process()
     // call") - otherwise the very first block after prepare() could run
-    // against whatever IR (if any) happened to be active previously.
+    // against whatever IR (if any) happened to be active previously. Called
+    // directly (not queued): prepare() only ever runs from prepareToPlay(),
+    // with the host contractually guaranteeing processing is suspended, so
+    // there is no concurrent process() call for a direct
+    // loadImpulseResponse() call here to race (see the class comment's
+    // "Threading" section).
     if (usingUserImpulseResponse && userImpulseResponseFile.existsAsFile())
     {
         convolution.loadImpulseResponse (userImpulseResponseFile,
@@ -33,11 +47,11 @@ void ReverbEngine::prepare (const juce::dsp::ProcessSpec& spec)
         // to match the last-generated ones: prepare() can run after a
         // sample-rate change, which invalidates any previously generated
         // buffer (it was sized and sampled for the old rate).
-        loadProceduralImpulseResponse (requestedDecaySeconds.load (std::memory_order_relaxed),
-                                        requestedDampingHz.load (std::memory_order_relaxed),
-                                        static_cast<ReverbIR::SpaceType> (requestedSpace.load (std::memory_order_relaxed)),
-                                        requestedEarlyLateBalance01.load (std::memory_order_relaxed),
-                                        requestedFreeze.load (std::memory_order_relaxed));
+        loadProceduralImpulseResponseSynchronously (requestedDecaySeconds.load (std::memory_order_relaxed),
+                                                      requestedDampingHz.load (std::memory_order_relaxed),
+                                                      static_cast<ReverbIR::SpaceType> (requestedSpace.load (std::memory_order_relaxed)),
+                                                      requestedEarlyLateBalance01.load (std::memory_order_relaxed),
+                                                      requestedFreeze.load (std::memory_order_relaxed));
     }
 
     convolution.prepare (spec);
@@ -202,7 +216,7 @@ void ReverbEngine::regenerateImpulseResponseIfNeeded()
     if (! decayChanged && ! dampingChanged && ! spaceChanged && ! balanceChanged && ! freezeChanged)
         return;
 
-    loadProceduralImpulseResponse (decay, damping, space, earlyLateBalance, freeze);
+    queueProceduralImpulseResponse (decay, damping, space, earlyLateBalance, freeze);
 }
 
 bool ReverbEngine::loadUserImpulseResponse (const juce::File& file)
@@ -227,11 +241,17 @@ bool ReverbEngine::loadUserImpulseResponse (const juce::File& file)
     if (durationSeconds > maxUserImpulseResponseSeconds)
         return false;
 
-    const auto stereo = numChannels >= 2 ? juce::dsp::Convolution::Stereo::yes
-                                          : juce::dsp::Convolution::Stereo::no;
-
-    convolution.loadImpulseResponse (file, stereo, juce::dsp::Convolution::Trim::yes, 0,
-                                      juce::dsp::Convolution::Normalise::yes);
+    // Hand the (already-validated) file off for process() to actually load
+    // on the audio thread (see the class comment's "Threading" section) -
+    // juce::File's copy is refcounted/non-allocating, and the
+    // File-taking loadImpulseResponse() overload itself only enqueues a
+    // background-loader command, so this costs nothing extra beyond the
+    // validation already done above.
+    {
+        const juce::SpinLock::ScopedLockType lock (pendingImpulseResponseLock);
+        pendingImpulseResponse.kind = PendingImpulseResponseKind::userFile;
+        pendingImpulseResponse.userFile = file;
+    }
 
     usingUserImpulseResponse = true;
     userImpulseResponseFile = file;
@@ -248,16 +268,16 @@ void ReverbEngine::clearUserImpulseResponse()
 
     // Reload the procedural IR immediately (rather than waiting for the
     // next regenerateImpulseResponseIfNeeded() tick) so the revert is
-    // effective as soon as this call returns.
-    loadProceduralImpulseResponse (requestedDecaySeconds.load (std::memory_order_relaxed),
-                                    requestedDampingHz.load (std::memory_order_relaxed),
-                                    static_cast<ReverbIR::SpaceType> (requestedSpace.load (std::memory_order_relaxed)),
-                                    requestedEarlyLateBalance01.load (std::memory_order_relaxed),
-                                    requestedFreeze.load (std::memory_order_relaxed));
+    // effective as soon as process() next runs.
+    queueProceduralImpulseResponse (requestedDecaySeconds.load (std::memory_order_relaxed),
+                                     requestedDampingHz.load (std::memory_order_relaxed),
+                                     static_cast<ReverbIR::SpaceType> (requestedSpace.load (std::memory_order_relaxed)),
+                                     requestedEarlyLateBalance01.load (std::memory_order_relaxed),
+                                     requestedFreeze.load (std::memory_order_relaxed));
 }
 
-void ReverbEngine::loadProceduralImpulseResponse (float decaySeconds, float dampingHz,
-                                                    ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze)
+void ReverbEngine::loadProceduralImpulseResponseSynchronously (float decaySeconds, float dampingHz,
+                                                                 ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze)
 {
     auto impulseResponse = ReverbIR::generateProceduralImpulseResponse (sampleRate, decaySeconds, dampingHz, numChannels,
                                                                           space, earlyLateBalance01, freeze);
@@ -276,12 +296,83 @@ void ReverbEngine::loadProceduralImpulseResponse (float decaySeconds, float damp
     lastGeneratedFreeze = freeze;
 }
 
+void ReverbEngine::queueProceduralImpulseResponse (float decaySeconds, float dampingHz,
+                                                     ReverbIR::SpaceType space, float earlyLateBalance01, bool freeze)
+{
+    // The non-real-time-safe part (heap allocation, per-sample exp()/random
+    // calls) happens here, on the message thread, exactly as before -
+    // building `impulseResponse` doesn't touch the audio thread at all.
+    auto impulseResponse = ReverbIR::generateProceduralImpulseResponse (sampleRate, decaySeconds, dampingHz, numChannels,
+                                                                          space, earlyLateBalance01, freeze);
+
+    // Hand the finished buffer off for process() to actually load on the
+    // audio thread (see the class comment's "Threading" section). The
+    // critical section is just a move-assignment (no allocation - it
+    // transfers the buffer's already-allocated storage) so this lock is
+    // held for a negligible, bounded duration.
+    {
+        const juce::SpinLock::ScopedLockType lock (pendingImpulseResponseLock);
+        pendingImpulseResponse.kind = PendingImpulseResponseKind::procedural;
+        pendingImpulseResponse.proceduralBuffer = std::move (impulseResponse);
+        pendingImpulseResponse.proceduralSampleRate = sampleRate;
+    }
+
+    lastGeneratedDecaySeconds = decaySeconds;
+    lastGeneratedDampingHz = dampingHz;
+    lastGeneratedSpace = space;
+    lastGeneratedEarlyLateBalance01 = earlyLateBalance01;
+    lastGeneratedFreeze = freeze;
+}
+
+void ReverbEngine::applyPendingImpulseResponseIfAny() noexcept
+{
+    const juce::SpinLock::ScopedTryLockType lock (pendingImpulseResponseLock);
+
+    if (! lock.isLocked() || pendingImpulseResponse.kind == PendingImpulseResponseKind::none)
+        return;
+
+    const auto stereo = numChannels >= 2 ? juce::dsp::Convolution::Stereo::yes
+                                          : juce::dsp::Convolution::Stereo::no;
+
+    if (pendingImpulseResponse.kind == PendingImpulseResponseKind::procedural)
+    {
+        // The AudioBuffer-taking overload takes ownership of the buffer
+        // (moved out below) rather than allocating - see juce_Convolution.h:
+        // "To avoid memory allocation on the audio thread, this function
+        // takes ownership of the buffer passed in."
+        convolution.loadImpulseResponse (std::move (pendingImpulseResponse.proceduralBuffer),
+                                          pendingImpulseResponse.proceduralSampleRate,
+                                          stereo,
+                                          juce::dsp::Convolution::Trim::no,
+                                          juce::dsp::Convolution::Normalise::yes);
+    }
+    else // userFile
+    {
+        // juce::File's copy (taken internally by this overload) is
+        // refcounted, not allocating; the actual file read/decode happens
+        // asynchronously on juce::dsp::Convolution's own background thread,
+        // never blocking this call.
+        convolution.loadImpulseResponse (pendingImpulseResponse.userFile,
+                                          stereo,
+                                          juce::dsp::Convolution::Trim::yes,
+                                          0,
+                                          juce::dsp::Convolution::Normalise::yes);
+    }
+
+    pendingImpulseResponse.kind = PendingImpulseResponseKind::none;
+}
+
 void ReverbEngine::process (juce::dsp::AudioBlock<float>& block) noexcept
 {
     const auto numSamples = block.getNumSamples();
 
     if (numSamples == 0)
         return;
+
+    // The only place juce::dsp::Convolution::loadImpulseResponse() is ever
+    // called outside prepare() - see the class comment's "Threading"
+    // section and applyPendingImpulseResponseIfAny()'s own doc comment.
+    applyPendingImpulseResponseIfAny();
 
     // Capture the pre-processing signal as "dry" before Pre-Delay/
     // convolution/Modulation/Width touch `block`. DryWetMixer internally

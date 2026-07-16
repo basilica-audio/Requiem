@@ -121,6 +121,15 @@ TEST_CASE ("Extreme parameter values at both range edges produce no NaN/Inf", "[
         setParam (processor, ParamIDs::modulation, useMinimum ? 0.0f : 100.0f);
         setParam (processor, ParamIDs::freeze, useMinimum ? 0.0f : 1.0f);
 
+        // Let the real ~20 Hz message-thread Timer actually fire and drive
+        // ReverbEngine::regenerateImpulseResponseIfNeeded() (see issue #11
+        // item 2). Without this, the Space/Early-Late-Balance/Freeze
+        // extremes set above only ever update atomics; the "no NaN/Inf"
+        // assertions below would only ever be exercising whatever IR
+        // prepareToPlay() originally generated from the defaults, not the
+        // regenerated-IR content for these specific extreme values.
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+
         TestHelpers::fillWithSine (buffer, 44100.0, 440.0, 0.8f);
 
         CHECK_NOTHROW (processor.processBlock (buffer, midi));

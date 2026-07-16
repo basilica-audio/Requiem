@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Data race:** `juce::dsp::Convolution::loadImpulseResponse()` was called from the message thread (`ReverbEngine::regenerateImpulseResponseIfNeeded()`/`loadUserImpulseResponse()`/`clearUserImpulseResponse()`) while `process()` called `convolution.process()` concurrently on the audio thread, violating `juce::dsp::Convolution`'s documented threading contract ("load() calls must be synchronised with process() calls, which in practice means making the load() call from the audio thread" - JUCE 8.0.14). `loadImpulseResponse()` is now called *only* from `ReverbEngine::process()` (the audio thread); the message thread only ever generates the procedural buffer (or validates a candidate user IR file) and hands the request off through a `juce::SpinLock`-guarded slot for `process()` to apply, wait-free, on its next call. (#13)
+- **Test coverage:** added a real dual-thread regression test (`tests/ConcurrentImpulseResponseReloadTests.cpp`) that runs `regenerateImpulseResponseIfNeeded()` and `process()` genuinely concurrently on separate `std::thread`s, exercising the reload path the rest of the suite only ever drove sequentially on one thread. (#14)
+- **Test coverage:** the long-run Freeze test and the extreme-parameter-values test now pump a real message-loop dispatch (`juce::MessageManager::runDispatchLoopUntil()`) so `RequiemAudioProcessor`'s 20 Hz `juce::Timer` actually fires and drives IR regeneration for the Freeze/Space/Early-Late-Balance values they set, instead of only ever exercising the IR `prepareToPlay()` generated from the defaults. (#11)
+- **DSP:** `ImpulseResponseGenerator`'s early-reflection tap placement no longer piles taps up at the last sample when the requested Decay is shorter than the active Space preset's reflection window (e.g. Decay = 0.1 s with Cathedral's 150 ms window) - the effective window is now scaled down to the buffer length. (#11)
+- **Docs:** corrected `docs/architecture.md`'s claim that `juce::dsp::Chorus` needs the same manual "prime before `reset()`" workaround as the outer `DryWetMixer` - in JUCE 8.0.14, `Chorus::prepare()` calls `update()` before its own `reset()` and self-primes correctly. Softened the "Modulation at 0% is a bit-identical passthrough" wording, which is asserted but not covered by a dedicated bit-exact null test. (#11)
+
 ## [0.1.0] - 2026-07-14
 
 ### Added
