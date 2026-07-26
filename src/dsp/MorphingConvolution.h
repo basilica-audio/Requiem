@@ -49,10 +49,16 @@
 //      ReverbEngine's IR render thread applies the pad (see its
 //      lastConsumedPadSamples atomic) and this class simply trusts that two
 //      consecutively posted kernels differ in length.
-//   3. Conservative fallback: if the sentinel has not matched after 500 ms
-//      of warm-up blocks, the fade starts anyway (and asserts in debug
-//      builds) - so a future JUCE change to IR-size reporting can never hang
-//      a swap.
+//   3. Conservative fallback: if the sentinel has not matched after 500 ms of
+//      *wall-clock* warm-up, the fade starts anyway (and asserts in debug
+//      builds) - so a future JUCE change to IR-size reporting can never hang a
+//      swap. Wall-clock, not a block count: an offline render pushes blocks
+//      through far faster than real time, so a block-count deadline would
+//      expire long before JUCE's background loader had any chance to install
+//      the kernel. The fallback additionally refuses to fire while the idle
+//      engine still reports no IR at all - fading towards a genuinely empty
+//      engine would be a dropout, which is worse than the hard swap the
+//      fallback exists to avoid.
 //   4. theta only begins moving on the block *after* readiness; until then
 //      the output is 100% the live engine, which preserves the steady-state
 //      null invariant below.
@@ -171,8 +177,7 @@ private:
     int expectedIdleIrSize = -1;
     int idleIrSizeBeforeLoad = 0;
 
-    int warmUpBlocksElapsed = 0;
-    int warmUpBlockLimit = 1;
+    double warmUpStartedAtMs = 0.0;
 
     int crossfadeSamplesElapsed = 0;
     int crossfadeLengthSamples = 4410;

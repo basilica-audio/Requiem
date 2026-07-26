@@ -105,6 +105,21 @@ namespace ReverbIR
         chamber
     };
 
+    // Analytic RT60, in seconds, of the generated tail at `frequencyHz`
+    // (new in v0.3.0). The procedural generator's per-band decay law is known
+    // in closed form - mid = Decay, the low band below the ~500 Hz crossover =
+    // Decay * bassDecayMultiplier, the high band above the ~5 kHz crossover =
+    // Decay * highBandDecayMultiplier, with the progressively descending
+    // cutoff pulling bands above the terminal Damping corner down further - so
+    // the Hybrid engine mode has no need to run a Schroeder fit over a buffer
+    // it just generated itself. User-loaded impulse responses always get the
+    // full measurement instead; see IrAnalysis::analyse().
+    //
+    // Pure and stateless. This describes the existing generator; it does not
+    // change a single generated sample.
+    float analyticRt60Seconds (float frequencyHz, float decaySeconds, float dampingHz,
+                                float bassDecayMultiplier);
+
     // Generates a procedural impulse response.
     //
     // `numChannels` is clamped to [1, 2] (mono or stereo); `seed` lets tests

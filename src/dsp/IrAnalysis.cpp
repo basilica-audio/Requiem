@@ -1,5 +1,7 @@
 #include "IrAnalysis.h"
 
+#include "ImpulseResponseGenerator.h"
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -429,8 +431,7 @@ namespace IrAnalysis
     }
 
     Analysis analyseProcedural (const juce::AudioBuffer<float>& impulseResponse, double sampleRate,
-                                 float decaySeconds, float dampingHz, float bassDecayMultiplier,
-                                 float highBandDecayMultiplier)
+                                 float decaySeconds, float dampingHz, float bassDecayMultiplier)
     {
         // NED/EDR still measured against the real buffer; only the RT60 fit
         // is replaced by the generator's own analytic per-band decay law
@@ -445,18 +446,7 @@ namespace IrAnalysis
         for (int band = 0; band < numOctaveBands; ++band)
         {
             const auto centre = centres[static_cast<size_t> (band)];
-            auto rt60 = decaySeconds;
-
-            if (centre < 500.0f)
-                rt60 = decaySeconds * bassDecayMultiplier;
-            else if (centre > 5000.0f)
-                rt60 = decaySeconds * highBandDecayMultiplier;
-
-            // Above the terminal Damping corner the generator's descending
-            // high-band cutoff removes energy progressively, which measures
-            // as a shorter RT60 the further above the corner the band sits.
-            if (centre > dampingHz && dampingHz > 0.0f)
-                rt60 *= juce::jlimit (0.1f, 1.0f, dampingHz / centre);
+            const auto rt60 = ReverbIR::analyticRt60Seconds (centre, decaySeconds, dampingHz, bassDecayMultiplier);
 
             analysis.rt60Octave[static_cast<size_t> (band)] = juce::jmax (0.05f, rt60);
             analysis.bandValid[static_cast<size_t> (band)] = isBandUsable (centre, sampleRate);

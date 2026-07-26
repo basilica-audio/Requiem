@@ -142,8 +142,7 @@ namespace IrAnalysis
     // analysis still runs against the real buffer, because the correction
     // FIR and the mixing time depend on the actual early field.
     Analysis analyseProcedural (const juce::AudioBuffer<float>& impulseResponse, double sampleRate,
-                                 float decaySeconds, float dampingHz, float bassDecayMultiplier,
-                                 float highBandDecayMultiplier);
+                                 float decaySeconds, float dampingHz, float bassDecayMultiplier);
 
     // Per-octave residual energy of `data` from `startSample` to the end.
     std::array<float, numOctaveBands> octaveBandEnergies (const float* data, int numSamples,

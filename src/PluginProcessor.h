@@ -99,5 +99,22 @@ private:
     std::atomic<float>* sizePercent = nullptr;
     std::atomic<float>* bassDecayPercent = nullptr;
 
+    // v0.3.0 additions.
+    std::atomic<float>* engineModeChoice = nullptr;
+    std::atomic<float>* tailModModeChoice = nullptr;
+    std::atomic<float>* tailModDepthPercent = nullptr;
+    std::atomic<float>* tailModRatePercent = nullptr;
+    std::atomic<float>* bloomAmountPercent = nullptr;
+    std::atomic<float>* lowCutHz = nullptr;
+    std::atomic<float>* highCutHz = nullptr;
+    std::atomic<float>* duckAmountPercent = nullptr;
+    std::atomic<float>* duckAttackMs = nullptr;
+    std::atomic<float>* duckReleaseMs = nullptr;
+
+    // Pushes every APVTS value into the engine. Real-time safe: each setter
+    // either writes an atomic or updates an internally smoothed target.
+    // Called from both prepareToPlay() (before prepare()) and processBlock().
+    void pushParametersToEngine() noexcept;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RequiemAudioProcessor)
 };

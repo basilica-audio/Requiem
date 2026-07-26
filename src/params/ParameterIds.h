@@ -142,4 +142,13 @@ namespace ParamIDs
 namespace StateKeys
 {
     inline constexpr auto userIrPath = "userIrPath";
+
+    // State schema version, written as a plain XML attribute alongside
+    // userIrPath (new in v0.3.0). Pre-v0.3.0 states carry no such attribute;
+    // that absence *is* the marker for the v0.2.0-era layout, which is defined
+    // retroactively as schema 2. See PluginProcessor::setStateInformation.
+    inline constexpr auto stateSchema = "stateSchema";
+
+    // Schema this build writes.
+    inline constexpr int currentStateSchema = 3;
 }

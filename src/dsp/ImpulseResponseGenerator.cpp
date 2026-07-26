@@ -192,6 +192,29 @@ namespace ReverbIR
         }
     }
 
+    float analyticRt60Seconds (float frequencyHz, float decaySeconds, float dampingHz,
+                                float bassDecayMultiplier)
+    {
+        const auto clampedDecay = juce::jlimit (minDecaySeconds, maxDecaySeconds, decaySeconds);
+        const auto clampedBassDecay = juce::jlimit (minBassDecayMultiplier, maxBassDecayMultiplier, bassDecayMultiplier);
+        const auto clampedDamping = juce::jlimit (minDampingHz, maxDampingHz, dampingHz);
+
+        auto rt60 = clampedDecay;
+
+        if (frequencyHz < lowMidCrossoverHz)
+            rt60 = clampedDecay * clampedBassDecay;
+        else if (frequencyHz > midHighCrossoverHz)
+            rt60 = clampedDecay * highBandDecayMultiplier;
+
+        // Above the terminal Damping corner the high band's progressively
+        // descending cutoff strips energy as the tail runs, which measures as
+        // a shorter decay the further above the corner the band sits.
+        if (frequencyHz > clampedDamping)
+            rt60 *= juce::jlimit (0.1f, 1.0f, clampedDamping / frequencyHz);
+
+        return juce::jmax (minDecaySeconds, rt60);
+    }
+
     juce::AudioBuffer<float> generateProceduralImpulseResponse (double sampleRate,
                                                                   float decaySeconds,
                                                                   float dampingHz,

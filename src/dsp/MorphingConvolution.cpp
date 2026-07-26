@@ -29,8 +29,6 @@ void MorphingConvolution::prepare (const juce::dsp::ProcessSpec& spec)
     preparedChannels = static_cast<int> (spec.numChannels);
 
     crossfadeLengthSamples = juce::jmax (1, static_cast<int> (std::round (crossfadeSeconds * sampleRate)));
-    warmUpBlockLimit = juce::jmax (1, static_cast<int> (std::ceil (readinessFallbackSeconds * sampleRate
-                                                                    / juce::jmax (1.0, static_cast<double> (maximumBlockSize)))));
 
     for (auto& engine : engines)
         engine->prepare (spec);
@@ -51,7 +49,6 @@ void MorphingConvolution::reset()
     // "start a new stream", so there is no old tail worth fading out of. The
     // live engine keeps whatever kernel it holds.
     state = State::steady;
-    warmUpBlocksElapsed = 0;
     crossfadeSamplesElapsed = 0;
     expectedIdleIrSize = -1;
 }
@@ -64,7 +61,6 @@ void MorphingConvolution::loadKernelSynchronously (juce::AudioBuffer<float>&& ke
                                               juce::dsp::Convolution::Normalise::yes);
 
     state = State::steady;
-    warmUpBlocksElapsed = 0;
     crossfadeSamplesElapsed = 0;
 }
 
@@ -75,7 +71,6 @@ void MorphingConvolution::loadFileSynchronously (const juce::File& file, int num
                                               juce::dsp::Convolution::Normalise::yes);
 
     state = State::steady;
-    warmUpBlocksElapsed = 0;
     crossfadeSamplesElapsed = 0;
 }
 
@@ -83,7 +78,7 @@ void MorphingConvolution::beginWarmUp (int expectedSize) noexcept
 {
     expectedIdleIrSize = expectedSize;
     state = State::warmingUp;
-    warmUpBlocksElapsed = 0;
+    warmUpStartedAtMs = juce::Time::getMillisecondCounterHiRes();
     crossfadeSamplesElapsed = 0;
 }
 
@@ -184,8 +179,6 @@ void MorphingConvolution::process (juce::dsp::AudioBlock<float>& block) noexcept
     // right up to the moment theta starts moving.
     if (state == State::warmingUp)
     {
-        ++warmUpBlocksElapsed;
-
         const auto reportedSize = engines[idleIndex()]->getCurrentIRSize();
         const auto sentinelMatched = expectedIdleIrSize > 0
                                        ? reportedSize == expectedIdleIrSize
@@ -197,11 +190,16 @@ void MorphingConvolution::process (juce::dsp::AudioBlock<float>& block) noexcept
             state = State::crossfading;
             crossfadeSamplesElapsed = 0;
         }
-        else if (warmUpBlocksElapsed >= warmUpBlockLimit)
+        else if (reportedSize > 0
+                  && juce::Time::getMillisecondCounterHiRes() - warmUpStartedAtMs
+                       >= readinessFallbackSeconds * 1000.0)
         {
-            // Conservative fallback (brief 3.1 step 3): never hang a swap
-            // just because a future JUCE version reports IR sizes
-            // differently. Audible worst case is one hard-ish swap.
+            // Conservative fallback (brief 3.1 step 3): never hang a swap just
+            // because a future JUCE version reports IR sizes differently. The
+            // audible worst case here is one hard-ish swap between two real
+            // kernels - which is why the fallback only fires once the idle
+            // engine holds *something*. While it still reports nothing, warm-up
+            // simply continues and the output stays 100% the live engine.
             jassertfalse;
             state = State::crossfading;
             crossfadeSamplesElapsed = 0;
@@ -240,7 +238,6 @@ void MorphingConvolution::process (juce::dsp::AudioBlock<float>& block) noexcept
         liveIndex = idleIndex();
         state = State::steady;
         crossfadeSamplesElapsed = 0;
-        warmUpBlocksElapsed = 0;
         expectedIdleIrSize = -1;
     }
 }
