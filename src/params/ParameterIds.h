@@ -75,6 +75,64 @@ namespace ParamIDs
     // parameter). Bass rings longer than mid/high by default (130%),
     // matching real-hall low-frequency decay measurements.
     inline constexpr auto bassDecay = "bassDecay";
+
+    // v0.3.0 "Living Tail" additions (see the v0.3.0 implementation brief).
+    // Appended after the v0.2.0 parameters, never inserted between existing
+    // ones - see the FROZEN note above. Every one of these defaults to a
+    // neutral value: either a hard-bypass setting (lowCut/highCut/
+    // duckAmount) or a value that is inaudible because engineMode defaults
+    // to Classic Convolution, which is the bit-identical v0.2.0 engine.
+
+    // Engine topology: Classic Convolution (index 0, the bit-identical
+    // v0.2.0 engine and the default), Hybrid Tail (index 1, convolution
+    // early field spliced at the analysed mixing time into an auto-fitted
+    // feedback-delay-network late field), or Tail Bloom (index 2, the full
+    // convolution plus an FDN "bloom" layer summed on top). Order must
+    // match ReverbEngine::EngineMode.
+    inline constexpr auto engineMode = "engineMode";
+
+    // Tail modulation topology for the two FDN modes: Matrix (index 0,
+    // time-varying orthogonal Givens rotations - pitch-stable by
+    // construction), Lush (index 1, interpolated modulated delay reads -
+    // deliberately vintage, audibly detunes), or Off (index 2). Inaudible
+    // in Classic mode.
+    inline constexpr auto tailModMode = "tailModMode";
+
+    // Depth of the FDN tail modulation, 0-100%. Maps to 0-6 degrees of
+    // Givens rotation in Matrix mode, or 0-3 samples of delay deviation in
+    // Lush mode. Inaudible in Classic mode.
+    inline constexpr auto tailModDepth = "tailModDepth";
+
+    // Rate scaling of the FDN tail modulation LFOs, 25-400% of their
+    // nominal randomised base rates. Inaudible in Classic mode.
+    inline constexpr auto tailModRate = "tailModRate";
+
+    // Level of the FDN "bloom" branch summed on top of the full-length
+    // convolution in Tail Bloom mode, 0-100% (soft-tapered: branch gain is
+    // the square of the normalised amount). Inaudible in the other two
+    // modes.
+    inline constexpr auto bloomAmount = "bloomAmount";
+
+    // Wet-path post-EQ low cut (12 dB/oct high-pass), 20-2000 Hz. 20 Hz is
+    // a hard bypass - the filter is not run at all, so the default path is
+    // bit-identical to v0.2.0.
+    inline constexpr auto lowCut = "lowCut";
+
+    // Wet-path post-EQ high cut (12 dB/oct low-pass), 1000-20000 Hz.
+    // 20000 Hz is a hard bypass, as above.
+    inline constexpr auto highCut = "highCut";
+
+    // Amount by which the (dry) input signal ducks the wet signal,
+    // 0-100%. 0% is a bit-identical bypass - the wet gain is exactly 1.
+    inline constexpr auto duckAmount = "duckAmount";
+
+    // Attack time of the ducker's envelope follower, 1-200 ms. Inert
+    // while duckAmount is 0%.
+    inline constexpr auto duckAttack = "duckAttack";
+
+    // Release time of the ducker's envelope follower, 50-2000 ms. Inert
+    // while duckAmount is 0%.
+    inline constexpr auto duckRelease = "duckRelease";
 }
 
 // Not an APVTS parameter (it's a string, not automatable) - the path of an

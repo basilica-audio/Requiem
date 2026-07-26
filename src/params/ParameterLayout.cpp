@@ -154,6 +154,119 @@ namespace rqm
             130.0f,
             juce::AudioParameterFloatAttributes().withLabel ("%")));
 
+        //======================================================================
+        // v0.3.0 "Living Tail" additions - appended after the v0.2.0
+        // parameters, never inserted between them (ParameterIds.h "FROZEN"
+        // note). Every default below is neutral: either a hard-bypass value
+        // (Low Cut 20 Hz / High Cut 20 kHz / Duck 0%) or a value that is
+        // structurally inaudible because Engine defaults to Classic
+        // Convolution - the bit-identical v0.2.0 engine. A v0.2.0 session
+        // reloaded into v0.3.0 therefore renders identically; see
+        // tests/StateTests.cpp's same-binary migration render-null test.
+
+        // Engine: topology selector. Order must match ReverbEngine::EngineMode.
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::engineMode, 1 },
+            "Engine",
+            juce::StringArray { "Classic Convolution", "Hybrid Tail", "Tail Bloom" },
+            0));
+
+        // Tail Mod Mode: FDN tail-modulation topology. Order must match
+        // FdnTail::ModulationMode. Matrix is pitch-stable by construction
+        // (time-varying orthogonal feedback matrices); Lush deliberately
+        // detunes (interpolated modulated delay reads).
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { ParamIDs::tailModMode, 1 },
+            "Tail Mod Mode",
+            juce::StringArray { "Matrix", "Lush", "Off" },
+            0));
+
+        // Tail Mod Depth: 0-100%, default 40% (gated - only audible in the
+        // two FDN engine modes).
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::tailModDepth, 1 },
+            "Tail Mod Depth",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            40.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        // Tail Mod Rate: 25-400% of the nominal randomised LFO base rates,
+        // skewed so 100% (the nominal rates) sits at the knob's centre.
+        {
+            juce::NormalisableRange<float> tailModRateRange (25.0f, 400.0f, 0.1f);
+            tailModRateRange.setSkewForCentre (100.0f);
+
+            layout.add (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { ParamIDs::tailModRate, 1 },
+                "Tail Mod Rate",
+                tailModRateRange,
+                100.0f,
+                juce::AudioParameterFloatAttributes().withLabel ("%")));
+        }
+
+        // Bloom: level of the FDN bloom branch in Tail Bloom mode, 0-100%,
+        // default 30% (gated - inaudible in the other two modes).
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::bloomAmount, 1 },
+            "Bloom",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            30.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        // Low Cut: wet-path post-EQ high-pass, 20-2000 Hz. The 20 Hz
+        // default is a *hard bypass* (the filter is not run at all), so the
+        // wet path stays bit-identical to v0.2.0 until the user moves it.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::lowCut, 1 },
+            "Low Cut",
+            makeLogFrequencyRange (20.0f, 2000.0f),
+            20.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("Hz")));
+
+        // High Cut: wet-path post-EQ low-pass, 1000-20000 Hz. The 20 kHz
+        // default is a hard bypass, as above.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::highCut, 1 },
+            "High Cut",
+            makeLogFrequencyRange (1000.0f, 20000.0f),
+            20000.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("Hz")));
+
+        // Duck: how far the (dry) input ducks the wet signal. 0% is a
+        // bit-identical bypass - the wet gain is exactly 1.0.
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { ParamIDs::duckAmount, 1 },
+            "Duck",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f),
+            0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+        // Duck Attack: 1-200 ms, skew centre 20 ms. Inert while Duck is 0%.
+        {
+            juce::NormalisableRange<float> duckAttackRange (1.0f, 200.0f, 0.1f);
+            duckAttackRange.setSkewForCentre (20.0f);
+
+            layout.add (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { ParamIDs::duckAttack, 1 },
+                "Duck Attack",
+                duckAttackRange,
+                10.0f,
+                juce::AudioParameterFloatAttributes().withLabel ("ms")));
+        }
+
+        // Duck Release: 50-2000 ms, skew centre 300 ms. Inert while Duck is 0%.
+        {
+            juce::NormalisableRange<float> duckReleaseRange (50.0f, 2000.0f, 0.1f);
+            duckReleaseRange.setSkewForCentre (300.0f);
+
+            layout.add (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { ParamIDs::duckRelease, 1 },
+                "Duck Release",
+                duckReleaseRange,
+                250.0f,
+                juce::AudioParameterFloatAttributes().withLabel ("ms")));
+        }
+
         return layout;
     }
 }
