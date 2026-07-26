@@ -388,6 +388,14 @@ TEST_CASE ("User IR override unaffected: Size and Bass Decay have zero effect on
             CHECK (a[i] == Catch::Approx (b[i]).margin (1.0e-7));
     }
 
+    // Let the asynchronous impulse-response loads finish before the file goes
+    // away. juce::dsp::Convolution reads user IR files on its own background
+    // thread, and as of v0.3.0 there are two engines per instance (the morph
+    // pair) - so deleting the file the moment the audio assertions pass can
+    // pull it out from under a load that is still running, which JUCE reports
+    // as a stream of file/buffer assertion failures from inside its own loader.
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
+
     irFile.deleteFile();
 }
 

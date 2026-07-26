@@ -25,9 +25,20 @@ namespace
     // Third row (v0.2.0 additions): Size knob + Bass Decay knob.
     constexpr int thirdRowHeight = knobSize;
 
+    // Fourth row (v0.3.0): Engine combo + Tail Mod Mode combo + Tail Mod Depth
+    // + Tail Mod Rate + Bloom.
+    constexpr int fourthRowHeight = knobSize;
+    constexpr int engineComboWidth = 170;
+    constexpr int tailModComboWidth = 110;
+
+    // Fifth row (v0.3.0): the wet chain - Low Cut, High Cut, Duck, Duck Attack,
+    // Duck Release.
+    constexpr int fifthRowHeight = knobSize;
+
     constexpr int irRowHeight = 30;
-    constexpr int editorHeight = margin * 6 + presetBarHeight + labelHeight + knobSize + textBoxHeight
-                                  + secondRowHeight + thirdRowHeight + irRowHeight;
+    constexpr int editorHeight = margin * 8 + presetBarHeight + labelHeight + knobSize + textBoxHeight
+                                  + secondRowHeight + thirdRowHeight + fourthRowHeight + fifthRowHeight
+                                  + irRowHeight;
 
     // M2 i18n frame (.scaffold/specs/preset-system-m2.md): selects German
     // (resources/i18n/de.txt) or falls through to English, once, at editor
@@ -82,6 +93,46 @@ RequiemAudioProcessorEditor::RequiemAudioProcessorEditor (RequiemAudioProcessor&
 
     configureKnob (sizeKnob, ParamIDs::size, "Size");
     configureKnob (bassDecayKnob, ParamIDs::bassDecay, "Bass Decay");
+
+    //==========================================================================
+    // v0.3.0 "Living Tail" parameters. Same pattern as everything above: both
+    // combos are populated straight from their parameter's own choice list, so
+    // the editor can never drift out of sync with ParameterLayout.cpp's
+    // ordering - which matters more than usual here, because those indices map
+    // onto ReverbEngine::EngineMode and FdnTail::ModulationMode.
+    const auto configureChoiceCombo = [this] (juce::Label& label, juce::ComboBox& combo,
+                                               std::unique_ptr<ComboBoxAttachment>& attachment,
+                                               const juce::String& parameterId, const juce::String& labelText)
+    {
+        label.setText (labelText, juce::dontSendNotification);
+        label.setJustificationType (juce::Justification::centred);
+        label.attachToComponent (&combo, false);
+        addAndMakeVisible (label);
+
+        if (auto* param = dynamic_cast<juce::AudioParameterChoice*> (audioProcessor.apvts.getParameter (parameterId)))
+        {
+            int itemId = 1;
+
+            for (const auto& choice : param->choices)
+                combo.addItem (choice, itemId++);
+        }
+
+        addAndMakeVisible (combo);
+        attachment = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, parameterId, combo);
+    };
+
+    configureChoiceCombo (engineModeLabel, engineModeCombo, engineModeAttachment, ParamIDs::engineMode, "Engine");
+    configureChoiceCombo (tailModModeLabel, tailModModeCombo, tailModModeAttachment, ParamIDs::tailModMode, "Tail Mod");
+
+    configureKnob (tailModDepthKnob, ParamIDs::tailModDepth, "Mod Depth");
+    configureKnob (tailModRateKnob, ParamIDs::tailModRate, "Mod Rate");
+    configureKnob (bloomAmountKnob, ParamIDs::bloomAmount, "Bloom");
+
+    configureKnob (lowCutKnob, ParamIDs::lowCut, "Low Cut");
+    configureKnob (highCutKnob, ParamIDs::highCut, "High Cut");
+    configureKnob (duckAmountKnob, ParamIDs::duckAmount, "Duck");
+    configureKnob (duckAttackKnob, ParamIDs::duckAttack, "Duck Atk");
+    configureKnob (duckReleaseKnob, ParamIDs::duckRelease, "Duck Rel");
 
     addAndMakeVisible (freezeButton);
     freezeAttachment = std::make_unique<ButtonAttachment> (audioProcessor.apvts, ParamIDs::freeze, freezeButton);
@@ -162,6 +213,38 @@ void RequiemAudioProcessorEditor::resized()
     clearIrButton.setBounds (irRow.removeFromLeft (80));
     irRow.removeFromLeft (margin / 2);
     irStatusLabel.setBounds (irRow);
+
+    bounds.removeFromBottom (margin);
+
+    // Fifth row (v0.3.0): the wet chain.
+    auto fifthRow = bounds.removeFromBottom (fifthRowHeight);
+    fifthRow.removeFromTop (labelHeight);
+
+    for (auto* knob : { &lowCutKnob, &highCutKnob, &duckAmountKnob, &duckAttackKnob, &duckReleaseKnob })
+    {
+        knob->slider.setBounds (fifthRow.removeFromLeft (knobSize));
+        fifthRow.removeFromLeft (margin);
+    }
+
+    bounds.removeFromBottom (margin);
+
+    // Fourth row (v0.3.0): Engine + Tail Mod Mode + Mod Depth + Mod Rate + Bloom.
+    auto fourthRow = bounds.removeFromBottom (fourthRowHeight);
+    fourthRow.removeFromTop (labelHeight);
+
+    auto engineArea = fourthRow.removeFromLeft (engineComboWidth);
+    engineModeCombo.setBounds (engineArea.withSizeKeepingCentre (engineComboWidth, textBoxHeight));
+    fourthRow.removeFromLeft (margin);
+
+    auto tailModArea = fourthRow.removeFromLeft (tailModComboWidth);
+    tailModModeCombo.setBounds (tailModArea.withSizeKeepingCentre (tailModComboWidth, textBoxHeight));
+    fourthRow.removeFromLeft (margin);
+
+    for (auto* knob : { &tailModDepthKnob, &tailModRateKnob, &bloomAmountKnob })
+    {
+        knob->slider.setBounds (fourthRow.removeFromLeft (knobSize));
+        fourthRow.removeFromLeft (margin);
+    }
 
     bounds.removeFromBottom (margin);
 

@@ -1,0 +1,31 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.requiem",
+    "pluginVersion": "0.3.0",
+    "name": "Vintage Lush Plate",
+    "category": "Character",
+    "parameters": {
+        "decay": 2.8,
+        "preDelay": 8.0,
+        "damping": 7000.0,
+        "width": 100.0,
+        "mix": 45.0,
+        "output": 0.0,
+        "space": 2,
+        "earlyLateBalance": 85.0,
+        "modulation": 0.0,
+        "freeze": 0.0,
+        "size": 45.0,
+        "bassDecay": 95.0,
+        "engineMode": 1,
+        "tailModMode": 1,
+        "tailModDepth": 65.0,
+        "tailModRate": 130.0,
+        "bloomAmount": 30.0,
+        "lowCut": 150.0,
+        "highCut": 9000.0,
+        "duckAmount": 0.0,
+        "duckAttack": 10.0,
+        "duckRelease": 250.0
+    }
+}

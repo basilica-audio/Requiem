@@ -67,6 +67,28 @@ private:
     Knob sizeKnob;
     Knob bassDecayKnob;
 
+    // v0.3.0 "Living Tail" additions: two further rows, wired into the same
+    // generic layout and LookAndFeel as everything above. The photoreal M3
+    // editor lives on its own branches and is explicitly out of scope here -
+    // this is parameter wiring, not a GUI design.
+    juce::Label engineModeLabel;
+    juce::ComboBox engineModeCombo;
+    std::unique_ptr<ComboBoxAttachment> engineModeAttachment;
+
+    juce::Label tailModModeLabel;
+    juce::ComboBox tailModModeCombo;
+    std::unique_ptr<ComboBoxAttachment> tailModModeAttachment;
+
+    Knob tailModDepthKnob;
+    Knob tailModRateKnob;
+    Knob bloomAmountKnob;
+
+    Knob lowCutKnob;
+    Knob highCutKnob;
+    Knob duckAmountKnob;
+    Knob duckAttackKnob;
+    Knob duckReleaseKnob;
+
     juce::ToggleButton freezeButton { "Freeze" };
     std::unique_ptr<ButtonAttachment> freezeAttachment;
 

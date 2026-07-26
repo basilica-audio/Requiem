@@ -60,6 +60,13 @@ namespace
             { BinaryData::brightSlapChamber_json, BinaryData::brightSlapChamber_jsonSize },
             { BinaryData::fullWetSendHall_json, BinaryData::fullWetSendHall_jsonSize },
             { BinaryData::subtleAir_json, BinaryData::subtleAir_jsonSize },
+            // v0.3.0 "Living Tail" showcase presets.
+            { BinaryData::livingCathedral_json, BinaryData::livingCathedral_jsonSize },
+            { BinaryData::breathingChamber_json, BinaryData::breathingChamber_jsonSize },
+            { BinaryData::bloomingHall_json, BinaryData::bloomingHall_jsonSize },
+            { BinaryData::vintageLushPlate_json, BinaryData::vintageLushPlate_jsonSize },
+            { BinaryData::dialogueDuckedScore_json, BinaryData::dialogueDuckedScore_jsonSize },
+            { BinaryData::infiniteFrozenNave_json, BinaryData::infiniteFrozenNave_jsonSize },
         };
     }
 }
