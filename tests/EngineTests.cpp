@@ -393,3 +393,278 @@ TEST_CASE ("Modulation depth measurably changes the wet tail without affecting l
 
     CHECK (maxAbsoluteDifference > 1.0e-4);
 }
+
+//==============================================================================
+// v0.3.0 brief test 6.12: real-time safety.
+//
+// The allocation guard replaces the global operator new/delete pair and counts
+// every allocation made while it is armed, on the calling thread only. All the
+// replaceable forms are provided and all of them route through malloc/free, so
+// there is no possibility of an allocation from one form being freed by
+// another.
+namespace RealtimeGuard
+{
+    thread_local bool armed = false;
+    thread_local int allocations = 0;
+
+    struct ScopedGuard
+    {
+        ScopedGuard()  { allocations = 0; armed = true; }
+        ~ScopedGuard() { armed = false; }
+
+        int count() const noexcept { return allocations; }
+    };
+}
+
+void* operator new (std::size_t size)
+{
+    if (RealtimeGuard::armed)
+        ++RealtimeGuard::allocations;
+
+    if (size == 0)
+        size = 1;
+
+    if (auto* pointer = std::malloc (size))
+        return pointer;
+
+    throw std::bad_alloc();
+}
+
+void* operator new[] (std::size_t size)                              { return ::operator new (size); }
+void* operator new (std::size_t size, const std::nothrow_t&) noexcept { if (RealtimeGuard::armed) ++RealtimeGuard::allocations; return std::malloc (size == 0 ? 1 : size); }
+void* operator new[] (std::size_t size, const std::nothrow_t&) noexcept { if (RealtimeGuard::armed) ++RealtimeGuard::allocations; return std::malloc (size == 0 ? 1 : size); }
+
+void operator delete (void* pointer) noexcept                        { std::free (pointer); }
+void operator delete[] (void* pointer) noexcept                      { std::free (pointer); }
+void operator delete (void* pointer, std::size_t) noexcept           { std::free (pointer); }
+void operator delete[] (void* pointer, std::size_t) noexcept         { std::free (pointer); }
+void operator delete (void* pointer, const std::nothrow_t&) noexcept  { std::free (pointer); }
+void operator delete[] (void* pointer, const std::nothrow_t&) noexcept { std::free (pointer); }
+
+namespace
+{
+    ReverbEngine::EngineMode allModes[] = {
+        ReverbEngine::EngineMode::classicConvolution,
+        ReverbEngine::EngineMode::hybridTail,
+        ReverbEngine::EngineMode::tailBloom,
+    };
+
+    const char* modeName (ReverbEngine::EngineMode mode)
+    {
+        switch (mode)
+        {
+            case ReverbEngine::EngineMode::classicConvolution: return "Classic Convolution";
+            case ReverbEngine::EngineMode::hybridTail:         return "Hybrid Tail";
+            case ReverbEngine::EngineMode::tailBloom:          return "Tail Bloom";
+        }
+
+        return "?";
+    }
+}
+
+TEST_CASE ("6.12 The allocation guard itself works", "[dsp][engine][realtime]")
+{
+    // A guard that never fires would make every assertion below vacuous.
+    {
+        const RealtimeGuard::ScopedGuard guard;
+        auto* deliberate = new float[64];
+        delete[] deliberate;
+        REQUIRE (guard.count() > 0);
+    }
+
+    {
+        const RealtimeGuard::ScopedGuard guard;
+        volatile auto sum = 0.0f;
+
+        for (int i = 0; i < 1000; ++i)
+            sum = sum + static_cast<float> (i);
+
+        REQUIRE (guard.count() == 0);
+    }
+}
+
+TEST_CASE ("6.12 process() allocates nothing in any engine mode", "[dsp][engine][realtime]")
+{
+    constexpr int blockSize = 256;
+
+    for (auto mode : allModes)
+    {
+        ReverbEngine engine;
+        engine.setMixProportion (0.5f);
+        engine.setDecaySeconds (3.0f);
+        engine.setEngineMode (mode);
+        engine.setTailModMode (FdnTail::ModulationMode::matrix);
+        engine.setTailModDepth (0.5f);
+        engine.setBloomAmount (0.4f);
+        engine.setLowCutHz (120.0f);
+        engine.setHighCutHz (9000.0f);
+        engine.setDuckAmountPercent (50.0f);
+
+        juce::dsp::ProcessSpec spec { testSampleRate, static_cast<juce::uint32> (blockSize), 2 };
+        engine.prepare (spec);
+        engine.regenerateImpulseResponseIfNeeded();
+        REQUIRE (engine.waitForPendingRender());
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::Random random (61);
+
+        // A few unguarded blocks first: the very first call can legitimately
+        // touch lazily-initialised JUCE internals.
+        for (int block = 0; block < 8; ++block)
+        {
+            buffer.clear();
+            juce::dsp::AudioBlock<float> warmUp (buffer);
+            engine.process (warmUp);
+        }
+
+        int allocations = 0;
+
+        {
+            const RealtimeGuard::ScopedGuard guard;
+
+            for (int block = 0; block < 200; ++block)
+            {
+                for (int i = 0; i < blockSize; ++i)
+                {
+                    const auto sample = random.nextFloat() * 2.0f - 1.0f;
+                    buffer.setSample (0, i, sample);
+                    buffer.setSample (1, i, sample);
+                }
+
+                // Freeze toggles and engine-mode switches, mid-stream, on the
+                // audio thread - exactly what the brief asks the guard to cover.
+                if (block % 37 == 0)
+                    engine.setFreeze (block % 74 == 0);
+
+                if (block % 53 == 0)
+                    engine.setEngineMode (allModes[(block / 53) % 3]);
+
+                juce::dsp::AudioBlock<float> audioBlock (buffer);
+                engine.process (audioBlock);
+            }
+
+            allocations = guard.count();
+        }
+
+        INFO ("engine mode: " << modeName (mode));
+        CHECK (allocations == 0);
+        CHECK (TestHelpers::allSamplesFinite (buffer));
+    }
+}
+
+TEST_CASE ("6.12 Silence does not stall the engine on denormals", "[dsp][engine][realtime]")
+{
+    // Feedback loops that are allowed to fall into denormal arithmetic can run
+    // an order of magnitude slower on silence than on signal, which shows up as
+    // a plugin that drops out when the track goes quiet.
+    constexpr int blockSize = 256;
+
+    ReverbEngine engine;
+    engine.setMixProportion (0.5f);
+    engine.setDecaySeconds (4.0f);
+    engine.setEngineMode (ReverbEngine::EngineMode::hybridTail);
+    engine.setTailModMode (FdnTail::ModulationMode::matrix);
+
+    juce::dsp::ProcessSpec spec { testSampleRate, static_cast<juce::uint32> (blockSize), 2 };
+    engine.prepare (spec);
+    engine.regenerateImpulseResponseIfNeeded();
+    REQUIRE (engine.waitForPendingRender());
+
+    juce::AudioBuffer<float> buffer (2, blockSize);
+    juce::Random random (67);
+
+    const auto timeBlocks = [&] (bool silent)
+    {
+        juce::ScopedNoDenormals noDenormals;
+
+        // Warm up first so neither measurement pays for cold caches.
+        for (int block = 0; block < 50; ++block)
+        {
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const auto sample = silent ? 0.0f : (random.nextFloat() * 2.0f - 1.0f);
+                buffer.setSample (0, i, sample);
+                buffer.setSample (1, i, sample);
+            }
+
+            juce::dsp::AudioBlock<float> audioBlock (buffer);
+            engine.process (audioBlock);
+        }
+
+        const auto start = juce::Time::getHighResolutionTicks();
+
+        for (int block = 0; block < 400; ++block)
+        {
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const auto sample = silent ? 0.0f : (random.nextFloat() * 2.0f - 1.0f);
+                buffer.setSample (0, i, sample);
+                buffer.setSample (1, i, sample);
+            }
+
+            juce::dsp::AudioBlock<float> audioBlock (buffer);
+            engine.process (audioBlock);
+        }
+
+        return juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - start);
+    };
+
+    const auto busySeconds = timeBlocks (false);
+    const auto silentSeconds = timeBlocks (true);
+
+    INFO ("busy " << busySeconds << " s, silent " << silentSeconds << " s");
+    REQUIRE (busySeconds > 0.0);
+    CHECK (silentSeconds < busySeconds * 1.2);
+}
+
+TEST_CASE ("6.15 Hybrid mode stays well inside its CPU budget", "[dsp][engine][.benchmark]")
+{
+    constexpr int blockSize = 128;
+    constexpr int numBlocks = 2000;
+
+    ReverbEngine engine;
+    engine.setMixProportion (0.5f);
+    engine.setDecaySeconds (5.0f);
+    engine.setEngineMode (ReverbEngine::EngineMode::hybridTail);
+    engine.setTailModMode (FdnTail::ModulationMode::matrix);
+
+    juce::dsp::ProcessSpec spec { testSampleRate, static_cast<juce::uint32> (blockSize), 2 };
+    engine.prepare (spec);
+    engine.regenerateImpulseResponseIfNeeded();
+    REQUIRE (engine.waitForPendingRender());
+
+    juce::AudioBuffer<float> buffer (2, blockSize);
+    juce::Random random (71);
+
+    for (int block = 0; block < 100; ++block)
+    {
+        buffer.clear();
+        juce::dsp::AudioBlock<float> warmUp (buffer);
+        engine.process (warmUp);
+    }
+
+    const auto start = juce::Time::getHighResolutionTicks();
+
+    for (int block = 0; block < numBlocks; ++block)
+    {
+        for (int i = 0; i < blockSize; ++i)
+        {
+            const auto sample = random.nextFloat() * 2.0f - 1.0f;
+            buffer.setSample (0, i, sample);
+            buffer.setSample (1, i, sample);
+        }
+
+        juce::dsp::AudioBlock<float> audioBlock (buffer);
+        engine.process (audioBlock);
+    }
+
+    const auto elapsed = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - start);
+    const auto realTimeSeconds = static_cast<double> (numBlocks * blockSize) / testSampleRate;
+    const auto load = elapsed / realTimeSeconds;
+
+    // Note this is a Debug build: the release figure is several times lower.
+    // The assertion is a smoke test against an accidental order-of-magnitude
+    // regression, not the brief's 12% release-build budget.
+    INFO ("hybrid load " << (load * 100.0) << "% of real time (Debug build)");
+    CHECK (load < 1.0);
+}
