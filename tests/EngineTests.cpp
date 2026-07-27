@@ -465,10 +465,22 @@ namespace
 TEST_CASE ("6.12 The allocation guard itself works", "[dsp][engine][realtime]")
 {
     // A guard that never fires would make every assertion below vacuous.
+    //
+    // The allocation has to be one the optimiser cannot remove. A plain
+    // `new float[64]` immediately followed by `delete[]` is *not*: [expr.new]
+    // explicitly permits an implementation to omit the allocation of a
+    // new-expression whose storage is never observably used, and both Clang
+    // and MSVC do exactly that at Release optimisation levels - which made
+    // this self-test pass in Debug and fail in Release. So the storage is
+    // obtained through a direct call to the replaced `::operator new` (a plain
+    // function call, not a new-expression, so the elision permission does not
+    // apply) and is then written through a volatile pointer, making the
+    // allocated memory observably used and the call impossible to elide.
     {
         const RealtimeGuard::ScopedGuard guard;
-        auto* deliberate = new float[64];
-        delete[] deliberate;
+        auto* deliberate = static_cast<float*> (::operator new (64 * sizeof (float)));
+        *static_cast<volatile float*> (deliberate) = 1.0f;
+        ::operator delete (deliberate);
         REQUIRE (guard.count() > 0);
     }
 
