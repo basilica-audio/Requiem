@@ -5,38 +5,81 @@
 ```mermaid
 flowchart LR
     IN[Input] --> PD[Pre-Delay<br/>0-250 ms]
-    PD --> CONV[Convolution<br/>procedural/user IR]
-    CONV --> MOD[Modulation<br/>chorus, wet only]
+    PD --> MORPH[MorphingConvolution<br/>A/B pair, 100 ms output crossfade]
+    PD --> BRANCH[Branch pre-delay]
+    BRANCH --> FDN[FdnTail<br/>16 lines, fitted T60 f]
+    FDN --> CFIR[Correction FIR<br/>256-tap linear phase]
+    MORPH --> SUM((sum))
+    CFIR --> SUM
+    SUM --> MOD[Modulation<br/>chorus, wet only]
     MOD --> WIDTH[Width<br/>M/S, wet only]
-    WIDTH --> MIX[Dry/Wet Mix]
+    WIDTH --> WET[Wet chain<br/>low/high cut + ducker]
+    WET --> MIX[Dry/Wet Mix]
     IN -.->|delay-compensated dry path| MIX
+    IN -.->|mono sum, ducker sidechain| WET
     MIX --> OUT_GAIN[Output trim]
     OUT_GAIN --> OUT[Output]
-
-    DECAY[Decay] -.->|message thread| IRGEN[Impulse Response<br/>Generator]
-    DAMPING[Damping] -.->|message thread| IRGEN
-    SPACE[Space] -.->|message thread| IRGEN
-    BALANCE[Early/Late Balance] -.->|message thread| IRGEN
-    FREEZE[Freeze] -.->|message thread| IRGEN
-    SIZE[Size] -.->|message thread| IRGEN
-    BASSDECAY[Bass Decay] -.->|message thread| IRGEN
-    IRGEN -.->|hand off via SpinLock| PENDING[pendingImpulseResponse]
-    PENDING -.->|loadImpulseResponse,<br/>audio thread only| CONV
-    USERIR[User IR file] -.->|validated, message thread| PENDING
 ```
 
-Everything from Pre-Delay through Width is the "wet" path, owned by `ReverbEngine` (`src/dsp/ReverbEngine.{h,cpp}`). The dry path is the untouched input signal, delayed to stay time-aligned with the wet path's reported latency (see [Latency](#latency) below), then blended in at the Mix stage via `juce::dsp::DryWetMixer`. Output trim is applied after the mix.
+The FDN branch runs only in the two FDN engine modes; in Classic Convolution it is not processed at all.
+
+```mermaid
+flowchart LR
+    PARAMS[Decay, Damping, Space,<br/>Early/Late, Freeze, Size,<br/>Bass Decay, Engine] -.->|20 Hz timer,<br/>message thread| SNAP[Parameter snapshot]
+    SNAP -.->|coalesced, 0 or 1 job| RENDER[IR render thread]
+    RENDER --> IRGEN[Impulse Response<br/>Generator]
+    RENDER --> ANALYSIS[IrAnalysis<br/>t_mix, RT60 f, EDR]
+    ANALYSIS --> DESIGN[AttenuationDesigner<br/>per-line GEQ fit]
+    DESIGN -.->|SpinLock hand-off| FDNCOEFF[FdnTail coefficients]
+    IRGEN -.->|SpinLock hand-off| PENDING[pendingImpulseResponse]
+    ANALYSIS -.->|SpinLock hand-off| SPLICE[Splice setup:<br/>t_mix, branch pre-delay,<br/>correction FIR]
+    PENDING -.->|loadImpulseResponse,<br/>audio thread only| MORPH2[MorphingConvolution]
+    USERIR[User IR file] -.->|validated, message thread| RENDER
+```
+
+Everything from Pre-Delay through the wet chain is the "wet" path, owned by `ReverbEngine` (`src/dsp/ReverbEngine.{h,cpp}`). The dry path is the untouched input signal, delayed to stay time-aligned with the wet path's reported latency (see [Latency](#latency) below), then blended in at the Mix stage via `juce::dsp::DryWetMixer`. Output trim is applied after the mix.
+
+## Engine modes (v0.3.0)
+
+| Mode | Early field | Late field |
+|---|---|---|
+| **Classic Convolution** (default) | The full procedural or user impulse response, convolved. | Same - the tail is part of the kernel. Bit-identical to v0.2.0. |
+| **Hybrid Tail** | The impulse response truncated at its analysed mixing time with a 10 ms raised-cosine fade. | A sixteen-line FDN whose per-octave decay is fitted to the same impulse response's measured RT60(f). |
+| **Tail Bloom** | The full convolution, untouched. | The full convolution *plus* an FDN bloom layer summed on top, pre-delayed by 0.6 of the mixing time. |
+
+Everything added in v0.3.0 is **LTI or quasi-LTI**. There is no nonlinearity anywhere in the new signal path, and therefore no oversampling and no antiderivative antialiasing: convolution is linear and time-invariant, and the FDN's time variation is a slowly rotating orthogonal matrix, which changes gain distribution rather than generating harmonics.
+
+### Why the FDN branch is pre-delayed the way it is
+
+The FDN's output taps read only delay-line outputs - there is no direct feedthrough term - so the network emits its first non-zero sample only after its *shortest* delay line, nominally 37 ms. The correction FIR is linear-phase and adds another 128 samples of group delay. The branch pre-delay therefore subtracts **both**:
+
+```
+branch pre-delay = t_mix - (128 + shortest delay line)
+```
+
+Compensating only the FIR's 128 samples - the obvious reading of "compensate the correction filter" - would place the synthesised tail's onset roughly 34 ms late at 48 kHz, leaving an audible energy hole immediately after the early field's 10 ms fade. `tests/LatencyTests.cpp` and `tests/HybridSpliceTests.cpp` both assert the correct sum, and explicitly assert that the naive alternative would have been wrong by more than the tolerance.
+
+### Why the convolution morph needs a handshake
+
+`juce::dsp::Convolution::loadImpulseResponse()` is asynchronous, installs the new kernel from inside `process()`, and offers no completion callback. Starting a crossfade on load would therefore fade towards a stale - or, on a cold engine, silent - kernel. `MorphingConvolution` instead warms the idle engine up (feeding it the same input, discarding its output) and waits for it to report the new kernel's exact length before moving the crossfade. Because `getCurrentIRSize()` is ambiguous when two consecutive kernels share a length - a Damping-only change regenerates an impulse response of *identical* length - each rendered kernel is zero-padded with an alternating 0 or 1 trailing sample, so consecutive kernels always differ. The pad is applied on the render thread, never on the audio thread, because growing an `AudioBuffer` allocates.
+
+The fallback margin is wall-clock rather than a block count, because an offline render pushes blocks through far faster than JUCE's background loader can be scheduled, and it refuses to fire while the idle engine still reports no IR at all - fading towards an empty engine is a dropout, which is worse than the hard swap the fallback exists to avoid.
 
 ## Module map
 
 | Directory | Responsibility |
 |---|---|
 | `src/dsp/ImpulseResponseGenerator.{h,cpp}` | Pure, stateless procedural IR generation: decorrelated multiband (low/mid/high) filtered-noise stereo tails with independent per-band RT60-style exponential envelopes and a progressively descending high-band cutoff, plus a density-buildup discrete early-reflection layer shaped by Space/Size and blended in via Early/Late Balance, and a Freeze mode that flattens every band's envelope. No `juce::AudioProcessor`/`juce::dsp::Convolution` dependency, so it is directly unit-testable (see `tests/ImpulseResponseGeneratorTests.cpp`). Not real-time safe (allocates, does per-sample `exp()`/random calls) - called only from `ReverbEngine::prepare()` or its message-thread-only regeneration path. |
+| `src/dsp/MorphingConvolution.{h,cpp}` | An A/B pair of `juce::dsp::Convolution` engines sharing one background message queue, with an equal-power 100 ms output crossfade on every kernel change and the readiness handshake described above. In steady state exactly one engine runs and its output passes through untouched, so the path is bit-identical to a plain single convolution (`tests/MorphCrossfadeTests.cpp`). |
+| `src/dsp/IrAnalysis.{h,cpp}` | Offline impulse-response analysis: Abel-Huang normalised echo density for the mixing time, per-octave Schroeder backward integration with an ISO 3382 -5...-35 dB regression for RT60(f), residual band energies at the mixing time, the raised-cosine splice window, and a 256-tap linear-phase correction-FIR designer. Background thread only. |
+| `src/dsp/AttenuationDesigner.{h,cpp}` | Fits each FDN delay line's ten-section graphic EQ to a target RT60(f) curve: an interaction matrix and its Householder-QR pseudo-inverse per sample rate, Gauss-Newton refinement against the realised response, a +/-10 dB shaping clamp, and a final stability projection that guarantees the cascade's magnitude stays strictly below unity at every frequency. Background thread only. |
+| `src/dsp/FdnTail.{h,cpp}` | The sixteen-line feedback delay network: mutually prime log-spaced delays, a Householder reflection composed with eight time-varying Givens rotations, the per-line attenuation cascade, Lush-mode interpolated modulated reads, and the structural freeze. Real-time safe. |
+| `src/dsp/WetChain.{h,cpp}` | Wet-path low cut, high cut and input-follower ducker. Hard-bypassed - not merely flat - at its defaults. |
 | `src/dsp/ReverbEngine.{h,cpp}` | The full signal chain: Pre-Delay, `juce::dsp::Convolution`, Modulation (`juce::dsp::Chorus`, wet only), Width (M/S), `juce::dsp::DryWetMixer`, output `juce::dsp::Gain`. Owns the split between real-time-safe parameter setters (Pre-Delay, Width, Mix, Output, Modulation - smoothed/internally-ramped, callable every block from the audio thread) and message-thread-only operations (impulse-response (re)generation/loading - now driven by Decay, Damping, Space, Early/Late Balance, Freeze, Size, and Bass Decay together - and user-IR load/clear, with format-reader validation and a length cap for robustness). Independent of `juce::AudioProcessor` so it is directly unit-testable (see `tests/EngineTests.cpp`). |
 | `src/params` | Parameter layout and `AudioProcessorValueTreeState` definitions - parameter IDs, ranges, defaults. Single source of truth for what a preset captures (plus the non-parameter user-IR-path state key in `ParameterIds.h`'s `StateKeys` namespace). |
 | `src/presets/{PresetManager,PresetBar,Localisation}.{h,cpp}` | The M2 preset system (`.scaffold/specs/preset-system-m2.md`), ported verbatim from `basilica-audio/nave`'s pilot implementation - see `docs/preset-system-notes.md` (nave) for the replication recipe. `PresetManager` owns factory (BinaryData-embedded `presets/factory/*.json`) and user (disk-scanned) preset discovery, load/save/rename/delete, default resolution, import/export (single files and zip banks), and a dirty-state flag, reading/writing APVTS exclusively through its public API. `PresetBar` is the horizontal-strip editor half. `Localisation` installs the German frame-string mapping (`resources/i18n/de.txt`) when the system language starts with "de", else falls through to English - selected once at editor construction, never touching core/DSP parameter names. |
 | `src/PluginProcessor.*` | Host plumbing: APVTS + `PresetManager` construction, `prepareToPlay`/`processBlock`/`reset`, latency reporting, state save/load (including the user-IR file path), and a `juce::Timer` that drives message-thread impulse-response regeneration. Reads APVTS values and pushes them into `ReverbEngine` every block; does not implement any DSP itself. |
-| `src/PluginEditor.*` | A simple, functional v0.1/v0.2 GUI: a `PresetBar` strip at the top, one rotary slider per float/choice parameter (Space uses a `ComboBox` via `ComboBoxAttachment`, populated directly from the parameter's own choice list; Freeze uses a `ToggleButton` via `ButtonAttachment`), plus "Load IR.../Clear IR" buttons for the user impulse-response override. A custom vector-drawn GUI is a later milestone (M3). |
+| `src/PluginEditor.*` | A simple, functional v0.1/v0.2/v0.3 GUI: a `PresetBar` strip at the top, one rotary slider per float/choice parameter (Space uses a `ComboBox` via `ComboBoxAttachment`, populated directly from the parameter's own choice list; Freeze uses a `ToggleButton` via `ButtonAttachment`), plus "Load IR.../Clear IR" buttons for the user impulse-response override. A custom vector-drawn GUI is a later milestone (M3). |
 
 Dependency direction is one-way: `PluginEditor` -> `params` (via attachments) + `presets` (via `PresetBar`) + `PluginProcessor` (via the IR load/clear methods), and `PluginProcessor` -> `params` + `presets` + `dsp`. `src/dsp` has no upward dependency on the processor, presets, or UI, which is what keeps `ReverbEngine`/`ImpulseResponseGenerator` testable in isolation.
 
@@ -103,6 +146,14 @@ The dry path used by the Mix control is time-aligned against this (normally zero
 **Modulation adds no reported latency either.** It is a short, continuously modulated delay line (a chorus effect), not a bulk delay - treated the same way a hardware chorus/vibrato pedal would be, not as something requiring host-side compensation. `tests/EngineTests.cpp`'s Modulation test asserts `getLatencySamples()` is identical at 0% and 100% depth.
 
 One JUCE 8.0.14 behaviour worth calling out (shared with the rest of the suite - see e.g. Overture's `tests/DryWetMixerContractTests.cpp`): `DryWetMixer`'s internal dry/wet gain smoothers default their *target* to fully wet (`mix == 1.0`) until `setWetMixProportion()` is called, and the mixer's own `reset()` (invoked from its `prepare()`) only snaps the smoothers' *current* value to whatever *target* is set at that moment. `ReverbEngine::prepare()` works around this by calling `dryWetMixer.setWetMixProportion(lastMixProportion)` *before* its own `reset()` runs, so the mixer is already sitting at the correct dry/wet balance from the very first `process()` call. `juce::dsp::Chorus`'s own internal `DryWetMixer` is subject to the identical gotcha - see [Modulation](#modulation) above for how `ReverbEngine::prepare()` handles it the same way.
+
+## Threading (v0.3.0)
+
+Impulse-response generation, analysis and the FDN attenuation fit all run on a dedicated low-priority background thread (`"Requiem IR Render"`). The message thread's 20 Hz timer only posts a parameter snapshot; there is never more than one outstanding job, and a snapshot that arrives while a render is running simply overwrites the pending one, so stale jobs are never even seen.
+
+What has **not** changed is the rule that made the v0.1.1 fix necessary in the first place: `juce::dsp::Convolution` requires `loadImpulseResponse()` to be synchronised with `process()`, so the audio thread remains the only place a kernel is ever installed. Results reach it through `juce::SpinLock`-guarded slots that `process()` only ever *tries* - it never blocks, and a slot that happens to be mid-write is simply picked up on the next block.
+
+One consequence worth stating explicitly: when a crossfade is still in flight, `ReverbEngine` leaves a newly rendered kernel sitting in its hand-off slot rather than dropping it or buffering a second one inside `MorphingConvolution`. Buffering would mean freeing an `AudioBuffer` on the audio thread.
 
 ## Parameter smoothing
 

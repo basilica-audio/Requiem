@@ -1,0 +1,31 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.requiem",
+    "pluginVersion": "0.3.0",
+    "name": "Blooming Hall",
+    "category": "Orchestral",
+    "parameters": {
+        "decay": 3.4,
+        "preDelay": 25.0,
+        "damping": 7500.0,
+        "width": 100.0,
+        "mix": 38.0,
+        "output": 0.0,
+        "space": 1,
+        "earlyLateBalance": 75.0,
+        "modulation": 0.0,
+        "freeze": 0.0,
+        "size": 65.0,
+        "bassDecay": 135.0,
+        "engineMode": 2,
+        "tailModMode": 0,
+        "tailModDepth": 35.0,
+        "tailModRate": 100.0,
+        "bloomAmount": 45.0,
+        "lowCut": 60.0,
+        "highCut": 20000.0,
+        "duckAmount": 0.0,
+        "duckAttack": 10.0,
+        "duckRelease": 250.0
+    }
+}

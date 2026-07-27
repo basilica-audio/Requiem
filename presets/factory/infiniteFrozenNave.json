@@ -1,0 +1,31 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.requiem",
+    "pluginVersion": "0.3.0",
+    "name": "Infinite Frozen Nave",
+    "category": "Special",
+    "parameters": {
+        "decay": 8.0,
+        "preDelay": 50.0,
+        "damping": 5000.0,
+        "width": 100.0,
+        "mix": 70.0,
+        "output": 0.0,
+        "space": 0,
+        "earlyLateBalance": 95.0,
+        "modulation": 0.0,
+        "freeze": 1.0,
+        "size": 95.0,
+        "bassDecay": 160.0,
+        "engineMode": 2,
+        "tailModMode": 0,
+        "tailModDepth": 50.0,
+        "tailModRate": 55.0,
+        "bloomAmount": 70.0,
+        "lowCut": 45.0,
+        "highCut": 8000.0,
+        "duckAmount": 0.0,
+        "duckAttack": 10.0,
+        "duckRelease": 250.0
+    }
+}

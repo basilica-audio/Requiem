@@ -40,6 +40,13 @@ namespace
             { BinaryData::brightSlapChamber_json, BinaryData::brightSlapChamber_jsonSize },
             { BinaryData::fullWetSendHall_json, BinaryData::fullWetSendHall_jsonSize },
             { BinaryData::subtleAir_json, BinaryData::subtleAir_jsonSize },
+            // v0.3.0 "Living Tail" showcase presets.
+            { BinaryData::livingCathedral_json, BinaryData::livingCathedral_jsonSize },
+            { BinaryData::breathingChamber_json, BinaryData::breathingChamber_jsonSize },
+            { BinaryData::bloomingHall_json, BinaryData::bloomingHall_jsonSize },
+            { BinaryData::vintageLushPlate_json, BinaryData::vintageLushPlate_jsonSize },
+            { BinaryData::dialogueDuckedScore_json, BinaryData::dialogueDuckedScore_jsonSize },
+            { BinaryData::infiniteFrozenNave_json, BinaryData::infiniteFrozenNave_jsonSize },
         };
     }
 
@@ -291,7 +298,8 @@ TEST_CASE ("PresetManager: every factory preset parses and loads without error",
     const auto all = manager.getAllPresets();
     const auto factoryCount = std::count_if (all.begin(), all.end(), [] (auto& e) { return e.isFactory; });
 
-    REQUIRE (factoryCount == 11); // docs/design-brief.md's Factory Presets section (10) + Default
+    // Eleven from v0.2.0 plus the six v0.3.0 Living Tail showcase presets.
+    REQUIRE (factoryCount == 17);
 
     for (auto& entry : all)
     {
@@ -607,4 +615,125 @@ TEST_CASE ("PresetManager: parameter-driven dirty tracking coexists safely with 
     }
 
     CHECK (manager.isDirty());
+}
+
+//==============================================================================
+// v0.3.0 brief test 6.14: factory preset pinning.
+//
+// The suite invariant is that a release never silently changes what an
+// existing preset sounds like. Every shipped v0.2.0 preset is checked here to
+// be free of any v0.3.0 parameter: a pre-v0.3.0 preset that had acquired, say,
+// an engineMode value would sound different on load, which is exactly what must
+// not happen. (The files themselves are additionally protected by review - they
+// are on the brief's do-not-touch list.)
+TEST_CASE ("6.14 The pre-v0.3.0 factory presets carry no v0.3.0 parameters", "[presets][v3]")
+{
+    struct PinnedPreset { const char* data; int size; const char* name; };
+
+    const PinnedPreset pinned[] = {
+        { BinaryData::default_json, BinaryData::default_jsonSize, "default" },
+        { BinaryData::cathedralWash_json, BinaryData::cathedralWash_jsonSize, "cathedralWash" },
+        { BinaryData::concertHall_json, BinaryData::concertHall_jsonSize, "concertHall" },
+        { BinaryData::chamberRoom_json, BinaryData::chamberRoom_jsonSize, "chamberRoom" },
+        { BinaryData::choirBloom_json, BinaryData::choirBloom_jsonSize, "choirBloom" },
+        { BinaryData::tightRhythmicHall_json, BinaryData::tightRhythmicHall_jsonSize, "tightRhythmicHall" },
+        { BinaryData::frozenDrone_json, BinaryData::frozenDrone_jsonSize, "frozenDrone" },
+        { BinaryData::darkSanctuary_json, BinaryData::darkSanctuary_jsonSize, "darkSanctuary" },
+        { BinaryData::brightSlapChamber_json, BinaryData::brightSlapChamber_jsonSize, "brightSlapChamber" },
+        { BinaryData::fullWetSendHall_json, BinaryData::fullWetSendHall_jsonSize, "fullWetSendHall" },
+        { BinaryData::subtleAir_json, BinaryData::subtleAir_jsonSize, "subtleAir" },
+    };
+
+    for (const auto& preset : pinned)
+    {
+        INFO ("preset " << preset.name);
+
+        // None of them may mention a v0.3.0 parameter: a pre-v0.3.0 preset
+        // that carried, say, an engineMode value would change what it sounds
+        // like on load, which is exactly what must not happen.
+        const juce::String contents (juce::CharPointer_UTF8 (preset.data), static_cast<size_t> (preset.size));
+
+        CHECK_FALSE (contents.contains (ParamIDs::engineMode));
+        CHECK_FALSE (contents.contains (ParamIDs::tailModMode));
+        CHECK_FALSE (contents.contains (ParamIDs::tailModDepth));
+        CHECK_FALSE (contents.contains (ParamIDs::tailModRate));
+        CHECK_FALSE (contents.contains (ParamIDs::bloomAmount));
+        CHECK_FALSE (contents.contains (ParamIDs::lowCut));
+        CHECK_FALSE (contents.contains (ParamIDs::highCut));
+        CHECK_FALSE (contents.contains (ParamIDs::duckAmount));
+        CHECK_FALSE (contents.contains (ParamIDs::duckAttack));
+        CHECK_FALSE (contents.contains (ParamIDs::duckRelease));
+    }
+}
+
+TEST_CASE ("6.14 Loading a pre-v0.3.0 factory preset leaves every new parameter neutral",
+           "[presets][v3]")
+{
+    RequiemAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+
+    ScopedTestDirectory scratch;
+    PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+    // Move the v0.3.0 parameters away from neutral first.
+    setParam (processor, ParamIDs::engineMode, 2.0f);
+    setParam (processor, ParamIDs::duckAmount, 75.0f);
+    setParam (processor, ParamIDs::lowCut, 500.0f);
+
+    REQUIRE (manager.loadPreset ("Cathedral Wash"));
+
+    const auto valueOf = [&processor] (const char* id)
+    {
+        auto* param = processor.apvts.getParameter (id);
+        REQUIRE (param != nullptr);
+        return param->convertFrom0to1 (param->getValue());
+    };
+
+    // A v0.2.0 preset says nothing about these, so loading it must restore
+    // their defaults rather than leaving whatever was there before.
+    CHECK (valueOf (ParamIDs::engineMode) == Catch::Approx (0.0f));
+    CHECK (valueOf (ParamIDs::duckAmount) == Catch::Approx (0.0f).margin (1.0e-3));
+    CHECK (valueOf (ParamIDs::lowCut) == Catch::Approx (20.0f).margin (1.0e-2));
+}
+
+TEST_CASE ("6.14 The six v0.3.0 presets load and set the parameters they name", "[presets][v3]")
+{
+    RequiemAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+
+    ScopedTestDirectory scratch;
+    PresetManager manager (processor.apvts, makeIsolatedConfig (scratch.dir), makeTestFactoryPresetAssets());
+
+    const auto valueOf = [&processor] (const char* id)
+    {
+        auto* param = processor.apvts.getParameter (id);
+        REQUIRE (param != nullptr);
+        return param->convertFrom0to1 (param->getValue());
+    };
+
+    struct Expected { const char* preset; int engineMode; };
+
+    const Expected expectations[] = {
+        { "Living Cathedral", 1 },
+        { "Breathing Chamber", 1 },
+        { "Blooming Hall", 2 },
+        { "Vintage Lush Plate", 1 },
+        { "Dialogue-Ducked Score", 1 },
+        { "Infinite Frozen Nave", 2 },
+    };
+
+    for (const auto& expected : expectations)
+    {
+        INFO ("preset " << expected.preset);
+        REQUIRE (manager.loadPreset (expected.preset));
+        CHECK (valueOf (ParamIDs::engineMode) == Catch::Approx (static_cast<float> (expected.engineMode)));
+    }
+
+    // The ducking showcase really does duck.
+    REQUIRE (manager.loadPreset ("Dialogue-Ducked Score"));
+    CHECK (valueOf (ParamIDs::duckAmount) > 50.0f);
+
+    // The Lush showcase really does select Lush.
+    REQUIRE (manager.loadPreset ("Vintage Lush Plate"));
+    CHECK (valueOf (ParamIDs::tailModMode) == Catch::Approx (1.0f));
 }

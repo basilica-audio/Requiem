@@ -8,6 +8,10 @@
 
 Requiem is a convolution reverb built specifically for the orchestral/choral layer of a heavy-music mix - strings, choir, pads, ambient textures - rather than as a general-purpose reverb for every source. It generates its own impulse response procedurally (no bundled sample library to license or manage), shaped by controls that map to musically meaningful decisions: how big the space is, how bright or dark the tail sounds, how much of a distinct early "slap" it has versus a smooth wash, and whether it should sustain forever rather than decay. You can also load your own captured impulse response (a real cathedral, hall, plate, or anything else in WAV/AIFF/etc) if you want a specific, non-procedural space instead.
 
+### v0.3.0: the Living Tail release
+
+v0.3.0 adds a second way of making a reverb tail. Alongside the convolution engine Requiem has always had, there is now a **feedback delay network** whose decay is fitted automatically to whatever impulse response is loaded - and unlike a fixed impulse response, it never repeats. Three engine modes choose how the two are combined, and a wet-path EQ and ducker were added for mixing. Everything defaults to the v0.2.0 behaviour: an existing session sounds exactly as it did.
+
 ### v0.2.0: a research-derived voicing rework
 
 Requiem's early-reflection and tail-darkening behavior was rebuilt in v0.2.0 against the *documented* design principles of category-defining cinematic/orchestral reverb units and general room-acoustics literature - public manuals, developer interviews, trade-press reviews, and DSP-literature articles, never against any hardware or commercial plugin's actual measured output, and no third-party impulse response was sampled or approximated (see `docs/research-notes.md` for the full sourcing and `docs/design-brief.md`'s Honesty section for what this does and doesn't license as a claim). The two headline corrections: early reflections now build up in *density* over the first tens of milliseconds instead of decaying from one loud initial tap, and the tail now darkens *progressively* as it decays (with bass ringing measurably longer than the highs) instead of applying one static filter color for its entire length. Two new controls - **Size** and **Bass Decay** - come out of that research pass; see their entries below.
@@ -33,6 +37,42 @@ input -> Pre-Delay -> Convolution (procedural or user IR) -> Modulation (chorus,
 Decay, Damping, Space, Early/Late Balance, Freeze, Size, and Bass Decay shape the impulse response itself (regenerated in the background, not on every sample); Pre-Delay, Modulation, Width, Mix, and Output shape how that impulse response is applied to your signal in real time. See [`docs/architecture.md`](architecture.md) if you want the full technical explanation of why it's split this way.
 
 ## Parameter reference
+
+### Engine
+
+Chooses how the reverb tail is produced.
+
+- **Classic Convolution** (default) - the engine Requiem has always used: one impulse response, convolved. Every existing session and preset uses this, and it sounds exactly as it did in v0.2.0.
+- **Hybrid Tail** - the impulse response supplies only the early reflections, up to the point where the reflection pattern has become statistically indistinguishable from noise (the *mixing time*, measured automatically). From there a sixteen-line feedback delay network takes over, with its per-octave decay fitted to the impulse response's own measured decay. The result decays like the captured space but never loops, because nothing is being replayed.
+- **Tail Bloom** - the full impulse response, untouched, with a modulating tail layered underneath it. Use this when you want a specific capture's character but want it to breathe.
+
+Switching modes is click-free. It is not meant for continuous automation.
+
+### Tail Mod Mode / Tail Mod Depth / Tail Mod Rate
+
+Movement in the tail, for the two feedback-delay-network modes. Silent in Classic Convolution.
+
+- **Matrix** (default) - modulates how the delay lines feed each other, using rotations that are mathematically guaranteed to preserve energy. Because no delay length ever changes, this adds movement **without detuning anything**: measured pitch deviation is under a hundredth of a semitone at full depth. Use this on anything harmonic.
+- **Lush** - modulates the delay lengths themselves, the classic vintage approach. This *does* detune, audibly and deliberately. Use it when you want that character, and be careful with sustained tonal material.
+- **Off** - no modulation.
+
+Depth sets how much; Rate scales how fast, as a percentage of the built-in rates.
+
+### Bloom
+
+How much of the modulating tail is layered underneath the impulse response in **Tail Bloom** mode. Inaudible in the other two modes. The taper is deliberately gentle at the bottom of the range so low settings are usable rather than jumping straight to an obvious second layer.
+
+### Low Cut / High Cut
+
+A 12 dB/octave high-pass and low-pass on the **wet signal only** - the dry signal is never touched. Low Cut is the usual fix for a reverb that muddies the low end; High Cut takes the edge off a bright tail without dulling the source.
+
+Both are hard-bypassed at their range ends (20 Hz and 20 kHz), which are the defaults. At those settings the filters are not run at all, so the wet path is bit-identical to v0.2.0.
+
+### Duck / Duck Attack / Duck Release
+
+Pulls the reverb down while the input is playing and lets it back up in the gaps - the standard trick for keeping a big reverb from burying a vocal or a dialogue track. The sidechain is the dry input, so what triggers the duck is the source, not the tail.
+
+Duck is 0% by default, and at 0% the wet gain is exactly 1 - no processing happens at all. Attack and Release set how fast the duck engages and recovers, and are inert while Duck is 0%.
 
 ### Decay
 **Range:** 0.1 – 10.0 s · **Default:** 2.5 s
@@ -79,7 +119,15 @@ Crossfades between the early-reflection layer (0%, shaped by Space) and the diff
 Adds a subtle, slow chorus-style movement to the reverb tail only (never to the dry signal). Procedurally generated impulse responses can occasionally sound slightly static or metallic compared to a real captured space; a small amount of Modulation (10-30%) softens that without being audible as an obvious chorus/vibrato effect. At 0% the Modulation stage is fully bypassed (identical output to not having it at all) - it's safe to leave at default unless you specifically want that extra movement.
 
 ### Freeze
+
 **Off / On** · **Default:** off
+
+**What Freeze does now depends on the Engine setting**, and the two behaviours are genuinely different:
+
+- **In Classic Convolution** it works exactly as it did in v0.2.0 - described in full below. The tail is regenerated with a flat envelope, so the sustain is bounded by the Decay setting.
+- **In Hybrid Tail and Tail Bloom** it is *structural and truly infinite*. The feedback delay network's per-line attenuation is faded out to unity over 20 ms, which leaves a lossless network: it holds the audio already circulating inside it, exactly, indefinitely. Nothing is regenerated, so the toggle takes effect within a single audio block rather than waiting for the next regeneration tick, and there is no Decay-length ceiling. Measured hold stability is within 0.2 dB over twenty seconds.
+
+The rest of this section describes the Classic behaviour.
 
 When engaged, the reverb tail sustains its current spectral content instead of decaying away - useful for holding a chord or texture under a transition, breakdown, or ambient section without needing a separate pad/drone instrument. Freeze is convolution-based, so the sustain is bounded by the Decay setting (up to 10 s), not literally infinite - think of it as "hold this snapshot of the tail for up to Decay seconds" rather than a feedback-loop-style infinite freeze. Damping still affects the frozen texture's brightness while it's engaged (held at one consistent color rather than continuing to darken); Early/Late Balance and the early-reflection layer are ignored while frozen (a frozen tail is always the full diffuse wash).
 

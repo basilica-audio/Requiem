@@ -60,6 +60,13 @@ namespace
             { BinaryData::brightSlapChamber_json, BinaryData::brightSlapChamber_jsonSize },
             { BinaryData::fullWetSendHall_json, BinaryData::fullWetSendHall_jsonSize },
             { BinaryData::subtleAir_json, BinaryData::subtleAir_jsonSize },
+            // v0.3.0 "Living Tail" showcase presets.
+            { BinaryData::livingCathedral_json, BinaryData::livingCathedral_jsonSize },
+            { BinaryData::breathingChamber_json, BinaryData::breathingChamber_jsonSize },
+            { BinaryData::bloomingHall_json, BinaryData::bloomingHall_jsonSize },
+            { BinaryData::vintageLushPlate_json, BinaryData::vintageLushPlate_jsonSize },
+            { BinaryData::dialogueDuckedScore_json, BinaryData::dialogueDuckedScore_jsonSize },
+            { BinaryData::infiniteFrozenNave_json, BinaryData::infiniteFrozenNave_jsonSize },
         };
     }
 }
@@ -84,6 +91,16 @@ RequiemAudioProcessor::RequiemAudioProcessor()
     freezeToggle = apvts.getRawParameterValue (ParamIDs::freeze);
     sizePercent = apvts.getRawParameterValue (ParamIDs::size);
     bassDecayPercent = apvts.getRawParameterValue (ParamIDs::bassDecay);
+    engineModeChoice = apvts.getRawParameterValue (ParamIDs::engineMode);
+    tailModModeChoice = apvts.getRawParameterValue (ParamIDs::tailModMode);
+    tailModDepthPercent = apvts.getRawParameterValue (ParamIDs::tailModDepth);
+    tailModRatePercent = apvts.getRawParameterValue (ParamIDs::tailModRate);
+    bloomAmountPercent = apvts.getRawParameterValue (ParamIDs::bloomAmount);
+    lowCutHz = apvts.getRawParameterValue (ParamIDs::lowCut);
+    highCutHz = apvts.getRawParameterValue (ParamIDs::highCut);
+    duckAmountPercent = apvts.getRawParameterValue (ParamIDs::duckAmount);
+    duckAttackMs = apvts.getRawParameterValue (ParamIDs::duckAttack);
+    duckReleaseMs = apvts.getRawParameterValue (ParamIDs::duckRelease);
 
     jassert (decaySeconds != nullptr);
     jassert (preDelayMs != nullptr);
@@ -97,6 +114,16 @@ RequiemAudioProcessor::RequiemAudioProcessor()
     jassert (freezeToggle != nullptr);
     jassert (sizePercent != nullptr);
     jassert (bassDecayPercent != nullptr);
+    jassert (engineModeChoice != nullptr);
+    jassert (tailModModeChoice != nullptr);
+    jassert (tailModDepthPercent != nullptr);
+    jassert (tailModRatePercent != nullptr);
+    jassert (bloomAmountPercent != nullptr);
+    jassert (lowCutHz != nullptr);
+    jassert (highCutHz != nullptr);
+    jassert (duckAmountPercent != nullptr);
+    jassert (duckAttackMs != nullptr);
+    jassert (duckReleaseMs != nullptr);
 
     // Resolves the default-resolution order (user "Default" preset >
     // factory "Default" preset > the ParameterLayout defaults already set
@@ -182,23 +209,7 @@ void RequiemAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
     // prepare() (re)generates the impulse response, so the very first block
     // after prepareToPlay() already reflects the host/session's actual
     // parameter values rather than the engine's built-in defaults.
-    engine.setDecaySeconds (decaySeconds->load (std::memory_order_relaxed));
-    engine.setDampingHz (dampingHz->load (std::memory_order_relaxed));
-    engine.setPreDelayMs (preDelayMs->load (std::memory_order_relaxed));
-    engine.setWidthPercent (widthPercent->load (std::memory_order_relaxed));
-    engine.setMixProportion (mixPercent->load (std::memory_order_relaxed) * 0.01f);
-    engine.setOutputDb (outputDb->load (std::memory_order_relaxed));
-    // AudioParameterChoice exposes its raw APVTS value as the choice index
-    // (0/1/2 here), which maps 1:1 onto ReverbIR::SpaceType's declaration
-    // order (see ParameterLayout.cpp).
-    engine.setSpaceType (static_cast<ReverbIR::SpaceType> (juce::jlimit (0, 2,
-        static_cast<int> (std::lround (spaceChoice->load (std::memory_order_relaxed))))));
-    engine.setEarlyLateBalance (earlyLateBalancePercent->load (std::memory_order_relaxed) * 0.01f);
-    engine.setModulationAmount (modulationPercent->load (std::memory_order_relaxed) * 0.01f);
-    // AudioParameterBool exposes its raw APVTS value as 0.0f/1.0f.
-    engine.setFreeze (freezeToggle->load (std::memory_order_relaxed) >= 0.5f);
-    engine.setSize (sizePercent->load (std::memory_order_relaxed) * 0.01f);
-    engine.setBassDecayMultiplier (bassDecayPercent->load (std::memory_order_relaxed) * 0.01f);
+    pushParametersToEngine();
 
     engine.prepare (spec);
 
@@ -252,6 +263,15 @@ void RequiemAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     // Decay/Damping are only ever recorded here (an atomic store inside the
     // engine, no allocation) - the actual impulse-response regeneration
     // happens on the message thread via timerCallback(), never here.
+    pushParametersToEngine();
+
+    juce::dsp::AudioBlock<float> block (buffer);
+    engine.process (block);
+}
+
+//==============================================================================
+void RequiemAudioProcessor::pushParametersToEngine() noexcept
+{
     engine.setDecaySeconds (decaySeconds->load (std::memory_order_relaxed));
     engine.setDampingHz (dampingHz->load (std::memory_order_relaxed));
     engine.setPreDelayMs (preDelayMs->load (std::memory_order_relaxed));
@@ -270,8 +290,20 @@ void RequiemAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     engine.setSize (sizePercent->load (std::memory_order_relaxed) * 0.01f);
     engine.setBassDecayMultiplier (bassDecayPercent->load (std::memory_order_relaxed) * 0.01f);
 
-    juce::dsp::AudioBlock<float> block (buffer);
-    engine.process (block);
+    // v0.3.0. Choice indices map 1:1 onto ReverbEngine::EngineMode and
+    // FdnTail::ModulationMode's declaration order (see ParameterLayout.cpp).
+    engine.setEngineMode (static_cast<ReverbEngine::EngineMode> (juce::jlimit (0, 2,
+        static_cast<int> (std::lround (engineModeChoice->load (std::memory_order_relaxed))))));
+    engine.setTailModMode (static_cast<FdnTail::ModulationMode> (juce::jlimit (0, 2,
+        static_cast<int> (std::lround (tailModModeChoice->load (std::memory_order_relaxed))))));
+    engine.setTailModDepth (tailModDepthPercent->load (std::memory_order_relaxed) * 0.01f);
+    engine.setTailModRateScale (tailModRatePercent->load (std::memory_order_relaxed) * 0.01f);
+    engine.setBloomAmount (bloomAmountPercent->load (std::memory_order_relaxed) * 0.01f);
+    engine.setLowCutHz (lowCutHz->load (std::memory_order_relaxed));
+    engine.setHighCutHz (highCutHz->load (std::memory_order_relaxed));
+    engine.setDuckAmountPercent (duckAmountPercent->load (std::memory_order_relaxed));
+    engine.setDuckAttackMs (duckAttackMs->load (std::memory_order_relaxed));
+    engine.setDuckReleaseMs (duckReleaseMs->load (std::memory_order_relaxed));
 }
 
 //==============================================================================
@@ -319,6 +351,11 @@ void RequiemAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
                             ? engine.getUserImpulseResponseFile().getFullPathName()
                             : juce::String());
 
+    // State schema version (new in v0.3.0). v0.1.x/v0.2.0 states carry no such
+    // attribute at all; those are defined retroactively as schema 2 and are
+    // recognised by its absence - see setStateInformation() below.
+    xml->setAttribute (StateKeys::stateSchema, StateKeys::currentStateSchema);
+
     copyXmlToBinary (*xml, destData);
 }
 
@@ -328,6 +365,17 @@ void RequiemAudioProcessor::setStateInformation (const void* data, int sizeInByt
 
     if (xmlState == nullptr || ! xmlState->hasTagName (apvts.state.getType()))
         return;
+
+    // Schema handling. A missing attribute (or "1"/"2") is a pre-v0.3.0 state:
+    // APVTS's own tolerant load fills every parameter the XML does not mention
+    // with its ParameterLayout default, and all ten v0.3.0 parameters default
+    // to neutral values - Classic engine, hard-bypassed wet chain - so such a
+    // session renders exactly as it did before. A *higher* schema than this
+    // build knows about is loaded just as tolerantly: keep whatever parses,
+    // ignore the rest, which is the same forward-compatibility stance v0.2.0
+    // took for unknown parameter IDs.
+    const auto loadedSchema = xmlState->getIntAttribute (StateKeys::stateSchema, 2);
+    juce::ignoreUnused (loadedSchema);
 
     apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
 

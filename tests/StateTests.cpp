@@ -5,6 +5,8 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <catch2/catch_approx.hpp>
+
+#include <vector>
 #include <catch2/catch_test_macros.hpp>
 
 namespace
@@ -386,5 +388,257 @@ TEST_CASE ("User IR override unaffected: Size and Bass Decay have zero effect on
             CHECK (a[i] == Catch::Approx (b[i]).margin (1.0e-7));
     }
 
+    // Let the asynchronous impulse-response loads finish before the file goes
+    // away. juce::dsp::Convolution reads user IR files on its own background
+    // thread, and as of v0.3.0 there are two engines per instance (the morph
+    // pair) - so deleting the file the moment the audio assertions pass can
+    // pull it out from under a load that is still running, which JUCE reports
+    // as a stream of file/buffer assertion failures from inside its own loader.
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
+
     irFile.deleteFile();
+}
+
+//==============================================================================
+// v0.3.0 brief test 6.10: the state-migration render null.
+//
+// This is deliberately a *same-binary* comparison rather than a check against
+// a checked-in v0.2.0 reference waveform. CI runs macOS on ARM and Windows on
+// x64, and ImpulseResponseGenerator.cpp drives its envelopes and filters with
+// libm transcendentals (std::exp, std::sin, std::cos) whose last bits differ
+// between platforms and compilers - so a stored waveform comparison would be
+// guaranteed to fail on at least one leg while telling us nothing about
+// migration. Comparing two instances of the same build removes that variable
+// entirely and still tests the thing that matters: that loading a pre-v0.3.0
+// session produces exactly what setting the same knobs by hand produces.
+namespace
+{
+    // Renders `numBlocks` blocks of a fixed pseudo-random signal through the
+    // processor and returns every output sample.
+    std::vector<float> renderProcessor (RequiemAudioProcessor& processor, int numBlocks, int blockSize)
+    {
+        std::vector<float> output;
+        output.reserve (static_cast<size_t> (numBlocks * blockSize * 2));
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        juce::Random random (0xBEEF);
+
+        for (int block = 0; block < numBlocks; ++block)
+        {
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const auto sample = random.nextFloat() * 2.0f - 1.0f;
+                buffer.setSample (0, i, sample);
+                buffer.setSample (1, i, sample * 0.9f);
+            }
+
+            processor.processBlock (buffer, midi);
+
+            for (int channel = 0; channel < 2; ++channel)
+                for (int i = 0; i < blockSize; ++i)
+                    output.push_back (buffer.getSample (channel, i));
+        }
+
+        return output;
+    }
+
+    // Strips the v0.3.0 additions out of a saved state, reproducing exactly
+    // what a v0.2.0-era session file looks like: the twelve original
+    // parameters, a userIrPath attribute, and no stateSchema attribute at all.
+    juce::MemoryBlock makeLegacyState (const juce::MemoryBlock& modernState)
+    {
+        const std::unique_ptr<juce::XmlElement> xml (juce::AudioProcessor::getXmlFromBinary (
+            modernState.getData(), static_cast<int> (modernState.getSize())));
+
+        jassert (xml != nullptr);
+
+        xml->removeAttribute (StateKeys::stateSchema);
+
+        const juce::StringArray v3Ids {
+            ParamIDs::engineMode, ParamIDs::tailModMode, ParamIDs::tailModDepth, ParamIDs::tailModRate,
+            ParamIDs::bloomAmount, ParamIDs::lowCut, ParamIDs::highCut,
+            ParamIDs::duckAmount, ParamIDs::duckAttack, ParamIDs::duckRelease,
+        };
+
+        for (int i = xml->getNumChildElements() - 1; i >= 0; --i)
+        {
+            auto* child = xml->getChildElement (i);
+
+            if (child->hasTagName ("PARAM") && v3Ids.contains (child->getStringAttribute ("id")))
+                xml->removeChildElement (child, true);
+        }
+
+        juce::MemoryBlock legacy;
+        juce::AudioProcessor::copyXmlToBinary (*xml, legacy);
+        return legacy;
+    }
+}
+
+TEST_CASE ("6.10 A pre-v0.3.0 state renders identically to a fresh instance at the same settings",
+           "[state][v3][migration]")
+{
+    constexpr int blockSize = 256;
+    constexpr int numBlocks = 375; // two seconds at 48 kHz
+
+    // A set of non-default values for the twelve pre-existing parameters, so
+    // the comparison cannot pass just because everything is at its default.
+    struct Setting { const char* id; float value; };
+
+    const Setting settings[] = {
+        { ParamIDs::decay, 5.5f },        { ParamIDs::preDelay, 45.0f },
+        { ParamIDs::damping, 4200.0f },   { ParamIDs::width, 145.0f },
+        { ParamIDs::mix, 62.0f },         { ParamIDs::output, -2.5f },
+        { ParamIDs::space, 0.0f },        { ParamIDs::earlyLateBalance, 35.0f },
+        { ParamIDs::modulation, 25.0f },  { ParamIDs::freeze, 0.0f },
+        { ParamIDs::size, 72.0f },        { ParamIDs::bassDecay, 155.0f },
+    };
+
+    const auto applySettings = [&settings] (RequiemAudioProcessor& processor)
+    {
+        for (const auto& setting : settings)
+        {
+            auto* param = processor.apvts.getParameter (setting.id);
+            REQUIRE (param != nullptr);
+            param->setValueNotifyingHost (param->convertTo0to1 (setting.value));
+        }
+    };
+
+    // Author the legacy state from a v0.3.0 instance, then strip it back.
+    juce::MemoryBlock legacyState;
+
+    {
+        RequiemAudioProcessor authoring;
+        authoring.prepareToPlay (48000.0, blockSize);
+        applySettings (authoring);
+
+        juce::MemoryBlock modernState;
+        authoring.getStateInformation (modernState);
+        legacyState = makeLegacyState (modernState);
+    }
+
+    // Instance L: loads the legacy, schema-less state.
+    RequiemAudioProcessor loaded;
+    loaded.prepareToPlay (48000.0, blockSize);
+    loaded.setStateInformation (legacyState.getData(), static_cast<int> (legacyState.getSize()));
+
+    // Instance R: a fresh instance with the same twelve values set by hand and
+    // the ten v0.3.0 parameters left at their defaults.
+    RequiemAudioProcessor reference;
+    reference.prepareToPlay (48000.0, blockSize);
+    applySettings (reference);
+
+    // Both need their impulse responses rendered before the comparison, or the
+    // test would be racing the render thread rather than comparing output.
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+
+    // Re-prepare so both start from identical, settled DSP state.
+    loaded.prepareToPlay (48000.0, blockSize);
+    reference.prepareToPlay (48000.0, blockSize);
+
+    const auto loadedRender = renderProcessor (loaded, numBlocks, blockSize);
+    const auto referenceRender = renderProcessor (reference, numBlocks, blockSize);
+
+    REQUIRE (loadedRender.size() == referenceRender.size());
+
+    auto maxDifference = 0.0f;
+
+    for (size_t i = 0; i < loadedRender.size(); ++i)
+        maxDifference = juce::jmax (maxDifference, std::abs (loadedRender[i] - referenceRender[i]));
+
+    INFO ("max difference " << maxDifference);
+    CHECK (maxDifference == 0.0f);
+}
+
+TEST_CASE ("6.10 A pre-v0.3.0 state loads with every new parameter at its neutral default",
+           "[state][v3][migration]")
+{
+    juce::MemoryBlock legacyState;
+
+    {
+        RequiemAudioProcessor authoring;
+        authoring.prepareToPlay (48000.0, 256);
+
+        // Move the new parameters away from their defaults first, so that
+        // finding them back at their defaults after the load proves the
+        // migration path rather than the constructor.
+        auto* engineParam = authoring.apvts.getParameter (ParamIDs::engineMode);
+        auto* duckParam = authoring.apvts.getParameter (ParamIDs::duckAmount);
+        REQUIRE (engineParam != nullptr);
+        REQUIRE (duckParam != nullptr);
+        engineParam->setValueNotifyingHost (engineParam->convertTo0to1 (2.0f));
+        duckParam->setValueNotifyingHost (duckParam->convertTo0to1 (80.0f));
+
+        juce::MemoryBlock modernState;
+        authoring.getStateInformation (modernState);
+        legacyState = makeLegacyState (modernState);
+    }
+
+    RequiemAudioProcessor restored;
+    restored.prepareToPlay (48000.0, 256);
+
+    // Perturb this instance too, so the defaults below cannot be left over.
+    auto* engineBefore = restored.apvts.getParameter (ParamIDs::engineMode);
+    REQUIRE (engineBefore != nullptr);
+    engineBefore->setValueNotifyingHost (engineBefore->convertTo0to1 (1.0f));
+
+    restored.setStateInformation (legacyState.getData(), static_cast<int> (legacyState.getSize()));
+
+    const auto valueOf = [&restored] (const char* id)
+    {
+        auto* param = restored.apvts.getParameter (id);
+        REQUIRE (param != nullptr);
+        return param->convertFrom0to1 (param->getValue());
+    };
+
+    CHECK (valueOf (ParamIDs::engineMode) == Catch::Approx (0.0f));   // Classic Convolution
+    CHECK (valueOf (ParamIDs::tailModMode) == Catch::Approx (0.0f));  // Matrix
+    CHECK (valueOf (ParamIDs::tailModDepth) == Catch::Approx (40.0f).margin (1.0e-3));
+    CHECK (valueOf (ParamIDs::tailModRate) == Catch::Approx (100.0f).margin (1.0e-2));
+    CHECK (valueOf (ParamIDs::bloomAmount) == Catch::Approx (30.0f).margin (1.0e-3));
+    CHECK (valueOf (ParamIDs::lowCut) == Catch::Approx (20.0f).margin (1.0e-2));
+    CHECK (valueOf (ParamIDs::highCut) == Catch::Approx (20000.0f).margin (1.0f));
+    CHECK (valueOf (ParamIDs::duckAmount) == Catch::Approx (0.0f).margin (1.0e-3));
+    CHECK (valueOf (ParamIDs::duckAttack) == Catch::Approx (10.0f).margin (1.0e-2));
+    CHECK (valueOf (ParamIDs::duckRelease) == Catch::Approx (250.0f).margin (1.0e-1));
+}
+
+TEST_CASE ("6.10 Saving writes the current state schema, and a future schema loads tolerantly",
+           "[state][v3][migration]")
+{
+    RequiemAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 256);
+
+    juce::MemoryBlock saved;
+    processor.getStateInformation (saved);
+
+    const std::unique_ptr<juce::XmlElement> xml (juce::AudioProcessor::getXmlFromBinary (
+        saved.getData(), static_cast<int> (saved.getSize())));
+    REQUIRE (xml != nullptr);
+
+    CHECK (xml->getIntAttribute (StateKeys::stateSchema) == StateKeys::currentStateSchema);
+
+    // A state from a hypothetical later version: a higher schema number and a
+    // parameter this build has never heard of. Keep what parses, ignore the
+    // rest - the same forward-compatibility stance v0.2.0 took.
+    xml->setAttribute (StateKeys::stateSchema, StateKeys::currentStateSchema + 4);
+
+    auto* invented = xml->createNewChildElement ("PARAM");
+    invented->setAttribute ("id", "somethingFromTheFuture");
+    invented->setAttribute ("value", 0.75);
+
+    auto* decayElement = xml->getChildByAttribute ("id", ParamIDs::decay);
+    REQUIRE (decayElement != nullptr);
+    decayElement->setAttribute ("value", 7.25);
+
+    juce::MemoryBlock futureState;
+    juce::AudioProcessor::copyXmlToBinary (*xml, futureState);
+
+    RequiemAudioProcessor restored;
+    restored.prepareToPlay (48000.0, 256);
+    CHECK_NOTHROW (restored.setStateInformation (futureState.getData(), static_cast<int> (futureState.getSize())));
+
+    auto* decayParam = restored.apvts.getParameter (ParamIDs::decay);
+    REQUIRE (decayParam != nullptr);
+    CHECK (decayParam->convertFrom0to1 (decayParam->getValue()) == Catch::Approx (7.25f).margin (1.0e-2));
 }

@@ -1,0 +1,31 @@
+{
+    "format": "basilica-preset-1",
+    "plugin": "com.yvesvogl.requiem",
+    "pluginVersion": "0.3.0",
+    "name": "Dialogue-Ducked Score",
+    "category": "Utility",
+    "parameters": {
+        "decay": 4.2,
+        "preDelay": 40.0,
+        "damping": 6800.0,
+        "width": 100.0,
+        "mix": 48.0,
+        "output": 0.0,
+        "space": 0,
+        "earlyLateBalance": 92.0,
+        "modulation": 0.0,
+        "freeze": 0.0,
+        "size": 80.0,
+        "bassDecay": 140.0,
+        "engineMode": 1,
+        "tailModMode": 0,
+        "tailModDepth": 30.0,
+        "tailModRate": 100.0,
+        "bloomAmount": 30.0,
+        "lowCut": 100.0,
+        "highCut": 11000.0,
+        "duckAmount": 65.0,
+        "duckAttack": 8.0,
+        "duckRelease": 400.0
+    }
+}

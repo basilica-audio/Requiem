@@ -10,7 +10,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS deployment ta
 # here at the top level avoids it being enabled implicitly deeper inside
 # JUCE's CMake helpers, which has been observed to break Ninja's generate
 # step (missing CMAKE_C_COMPILE_OBJECT rule variable).
-project(Requiem VERSION 0.2.0 LANGUAGES C CXX)
+project(Requiem VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -76,6 +76,12 @@ juce_add_binary_data(RequiemBinaryData SOURCES
     presets/factory/brightSlapChamber.json
     presets/factory/fullWetSendHall.json
     presets/factory/subtleAir.json
+    presets/factory/livingCathedral.json
+    presets/factory/breathingChamber.json
+    presets/factory/bloomingHall.json
+    presets/factory/vintageLushPlate.json
+    presets/factory/dialogueDuckedScore.json
+    presets/factory/infiniteFrozenNave.json
     resources/i18n/de.txt
 )
 

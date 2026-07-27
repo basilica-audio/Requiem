@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-27
+
+The "Living Tail" release. Requiem gains a second way of producing a reverb tail - a feedback delay network whose decay is fitted automatically to whatever impulse response is loaded - and the workflow controls a cinematic reverb needs in a mix.
+
+**Everything new defaults to neutral.** `engineMode` defaults to Classic Convolution, which is the v0.2.0 engine unchanged; the wet chain's two filters and its ducker default to hard-bypass values and are not run at all at those settings. A v0.2.0 session reloaded into v0.3.0 renders bit-identically - enforced by a same-binary render-null migration test, not by inspection.
+
+### Added
+
+- **Engine modes.** *Classic Convolution* (default, unchanged), *Hybrid Tail* (the impulse response supplies the early field up to its measured mixing time, a sixteen-line FDN supplies the late field), and *Tail Bloom* (the full convolution with an FDN bloom layer summed underneath).
+- **`FdnTail`** (`src/dsp/FdnTail.{h,cpp}`): sixteen mutually-prime, log-spaced delay lines; a Householder reflection composed with eight time-varying Givens rotations on disjoint index pairs (Schlecht & Habets, JASA 138, 2015); a ten-section attenuation cascade per line; and a structural freeze. Because both matrix factors are orthogonal at every instant, the prototype is lossless at every instant - the network cannot be destabilised by modulation, and the modulation cannot shift pitch, because no delay length ever changes.
+- **`AttenuationDesigner`** (`src/dsp/AttenuationDesigner.{h,cpp}`): fits each line's graphic EQ to a target RT60(f) curve, following Schlecht & Habets (DAFx-17) and Prawda et al. (DAFx-19) - an interaction matrix with a Householder-QR pseudo-inverse precomputed per sample rate, Gauss-Newton refinement against the realised response, and the paper's ±10 dB command-gain clamp. A final stability projection then guarantees the result: the finished cascade is swept over a frequency grid and, if its peak magnitude reaches unity, the broadband gain is shifted down by exactly the excess.
+- **`IrAnalysis`** (`src/dsp/IrAnalysis.{h,cpp}`): Abel-Huang normalised echo density (AES 121, 2006) for the mixing time; per-octave Schroeder backward integration (JASA 37, 1965) with an ISO 3382 -5…-35 dB regression for RT60(f); residual band energies at the mixing time; the raised-cosine splice window; and a 256-tap linear-phase correction-FIR designer following Carpentier et al. (DAFx-14, eq. 3). The procedural generator's own per-band decay is now exposed in closed form (`ReverbIR::analyticRt60Seconds`), so Hybrid mode skips the Schroeder fit for impulse responses it generated itself; user impulse responses always get the full measurement.
+- **`MorphingConvolution`** (`src/dsp/MorphingConvolution.{h,cpp}`): an A/B pair of `juce::dsp::Convolution` engines with a 100 ms equal-power output crossfade on every kernel change (Wefers 2015), replacing v0.2.0's hard swap. This is what removes the audible staircase when a knob is dragged and the impulse response is regenerated twenty times a second.
+- **`WetChain`** (`src/dsp/WetChain.{h,cpp}`): wet-path Low Cut and High Cut (12 dB/oct) plus an input-follower ducker, applied to the wet signal only.
+- **Ten new parameters**, appended after the frozen v0.2.0 block: `engineMode`, `tailModMode`, `tailModDepth`, `tailModRate`, `bloomAmount`, `lowCut`, `highCut`, `duckAmount`, `duckAttack`, `duckRelease`.
+- **Six factory presets** showcasing the new modes: Living Cathedral, Breathing Chamber, Blooming Hall, Vintage Lush Plate, Dialogue-Ducked Score, Infinite Frozen Nave. The eleven existing presets are untouched.
+- **State schema versioning**: `getStateInformation()` now writes `stateSchema="3"`. Pre-v0.3.0 states carry no such attribute and are recognised by its absence; a higher schema than this build knows about loads tolerantly.
+- Test suite expanded from 96 to 134 cases, with the measurable DSP claims asserted through real `process()` renders - T60(f) accuracy, stability Monte Carlo, pitch purity, freeze hold, mixing-time estimation, designer accuracy and reproducibility, splice continuity, wet-chain response and step timing, the migration render null, zero allocations, and zero latency.
+
+### Changed
+
+- **Freeze now branches on engine mode.** In Classic Convolution it works exactly as before (a regenerated flat-envelope kernel, bounded by Decay). In the two FDN modes it is structural: the network's attenuation is faded out to unity over 20 ms, leaving a lossless prototype that holds the circulating audio exactly and indefinitely, and the toggle takes effect within one audio block rather than waiting for a regeneration tick.
+- **Impulse-response work moved off the message thread.** Generation, analysis and the FDN fit now run on a dedicated low-priority background thread; the message thread only posts parameter snapshots. The audio thread remains the only place a kernel is installed, per `juce::dsp::Convolution`'s threading contract - the v0.1.1 fix is preserved, not regressed.
+- `docs/architecture.md`, `docs/manual.md` and `docs/presets.md` updated for the new modes, parameters and threading model.
+
+### Notes
+
+Three measurements came out looser than the implementation brief targeted. Each is documented at the assertion that pins it, with the measured numbers:
+
+- **Modulation sidebands.** The brief asked for sidebands 40 dB below the carrier. Over the specified 0-6° rotation range that is neither attainable nor desirable - measured -27.1 dB at full depth, -36.2 dB at the 40% default, -41.9 dB at 20% - because those sidebands *are* the audible movement the feature exists to produce. The pitch-purity claim that distinguishes Matrix from Lush holds with margin: 0.57 cents at full depth against a 1 cent budget.
+- **Hybrid tail echo density.** The FDN is excited by an impulse, so its echo density builds over hundreds of milliseconds, and that sparse opening always lands at the handover. Measured NED is 0.15 at 100 ms rising to 0.86 at 620 ms, against a target of 0.9 from t_mix + 50 ms. The fix is to excite the network from the early field rather than from the dry input, as Carpentier et al. do; that is a branch topology change and was left out of this release deliberately.
+- **Energy decay relief at the splice.** Matching within ±1 dB per band needs the FDN's own residual energy measured by rendering the network for every design, rather than taken analytically from the curve it was just fitted to. The analytic route is what keeps a continuous Decay drag down to a re-solve, which is the headline behaviour of Hybrid mode; the cost is a per-band tilt error of a few dB rather than one.
+
+### Third-party code
+
+None imported. Everything is built on `juce_dsp` plus a hand-rolled FDN and solver. JUCE 8.0.14 (AGPLv3 arm) and Catch2 v3.15.2 (BSL-1.0) remain the only dependencies, both already in-tree.
+
 ## [0.2.0] - 2026-07-16
 
 ### Added
