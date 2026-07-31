@@ -10,7 +10,7 @@ Requiem is a convolution reverb built specifically for the orchestral/choral lay
 
 ### v0.3.0: the Living Tail release
 
-v0.3.0 adds a second way of making a reverb tail. Alongside the convolution engine Requiem has always had, there is now a **feedback delay network** whose decay is fitted automatically to whatever impulse response is loaded - and unlike a fixed impulse response, it never repeats. Three engine modes choose how the two are combined, and a wet-path EQ and ducker were added for mixing. Everything defaults to the v0.2.0 behaviour: an existing session sounds exactly as it did.
+v0.3.0 adds a second way of making a reverb tail. Alongside the convolution engine Requiem has always had, there is now a **feedback delay network** whose decay is fitted automatically to whatever impulse response is loaded, hitting the target decay curve within 5% at every octave centre for the curve shapes Requiem produces (see [Under the hood](#under-the-hood) below) - and unlike a fixed impulse response, it never repeats. Three engine modes choose how the two are combined, and a wet-path EQ and ducker were added for mixing. Everything defaults to the v0.2.0 behaviour: an existing session sounds exactly as it did.
 
 ### v0.2.0: a research-derived voicing rework
 
@@ -35,6 +35,10 @@ input -> Pre-Delay -> Convolution (procedural or user IR) -> Modulation (chorus,
 ```
 
 Decay, Damping, Space, Early/Late Balance, Freeze, Size, and Bass Decay shape the impulse response itself (regenerated in the background, not on every sample); Pre-Delay, Modulation, Width, Mix, and Output shape how that impulse response is applied to your signal in real time. See [`docs/architecture.md`](architecture.md) if you want the full technical explanation of why it's split this way.
+
+### Reported latency
+
+Requiem reports **0 samples of latency, always** - in all three Engine modes (Classic Convolution, Hybrid Tail, Tail Bloom), at every documented sample rate (44.1/48/96/192 kHz), and throughout a live Engine-mode switch or an in-progress IR morph. A Kronecker delta pushed through Classic Convolution lands its first output sample at index 0. This holds even in Hybrid Tail, where the synthesised FDN branch has its own internal onset delay (a linear-phase correction filter plus the network's own shortest delay line): that delay is compensated internally by the branch's own pre-delay rather than surfaced to the host, so the plugin never asks your DAW to account for it. Pre-Delay itself is not part of this - it's an audible, user-controlled gap between the direct sound and the tail's onset, not something the plugin hides via latency compensation.
 
 ## Parameter reference
 
@@ -156,6 +160,24 @@ Use **Load IR...** in the editor to override the procedural generator with your 
 
 Requiem validates the file before loading it (rejecting anything it can't read as audio, or any file longer than 30 seconds - real captured impulse responses are essentially never that long, and this guards against accidentally selecting a full song/mix file instead of an actual IR).
 
+## Under the hood
+
+A few mechanisms worth knowing about if you want to understand why the Living Tail behaves the way it does, not just what the knobs are labelled:
+
+**The decay curve is solved for, not dialled in.** Each of the sixteen FDN delay lines carries a ten-section octave-band graphic EQ plus a broadband gain, fitted to the impulse response's own measured per-octave decay through a Householder-QR pseudo-inverse and Gauss-Newton refinement against the realised response, inside a ±10 dB command-gain clamp. A final stability projection sweeps the finished cascade across the control-frequency grid and pulls the broadband gain down by exactly any excess, so no line's loop gain ever reaches unity at any frequency. The designed cascade lands within **5% of the target at every octave centre from 63 Hz to 8 kHz, on all sixteen lines**, for the curve shapes Requiem actually produces (a flat target, and the procedural generator's own analytic curve) - fifty additional randomised decay curves from 0.1 to 5 seconds were run the same way with zero failures. The solve is bit-reproducible: two plugin instances at the same settings can never drift apart.
+
+**Movement without detuning, in Matrix mode.** The feedback matrix that drives Matrix-mode modulation is a Householder reflection composed with time-varying Givens rotations on disjoint index pairs, both orthogonal at every instant - so the network can't be destabilised by the modulation, and no delay length ever changes, meaning the modulation can't shift pitch. Measured pitch deviation at full depth: under one cent. Lush mode is the opposite tool, kept deliberately: it modulates the delay lengths themselves and detunes on purpose, which is the classic vintage-chorus character rather than a defect.
+
+**The Hybrid Tail handover is measured, not guessed.** The point where the impulse response's reflection pattern becomes statistically indistinguishable from noise (the mixing time) is measured per impulse response rather than assumed, then clamped to a 50-350 ms window. The response is split there with a raised-cosine crossfade, and the FDN branch is pre-delayed by *two* things together - a short correction filter's group delay and the network's own shortest delay line - because compensating only the filter would place the synthesised tail's onset roughly 34 ms late at 48 kHz and leave an audible gap right after the early field ends. If an impulse response doesn't decay in a way the fit is confident about (a gated or heavily chopped capture, for instance), Hybrid Tail detects that and falls back to convolving the full, unmodified impulse response instead of splicing a bad fit onto it - silently, per impulse response, and by design rather than as a hidden failure.
+
+**Every reverb-shaping knob crossfades, it never swaps hard.** Because kernel regeneration is asynchronous, changing Decay, Damping, Space, Size, Bass Decay or Early/Late Balance crossfades between the old and new convolution engines over 100 ms, gated on the new engine confirming it's actually ready rather than on a fixed timer - so a change is never applied before its kernel has finished loading.
+
+**Freeze is genuinely unbounded, but only in the two FDN-based modes.** In Hybrid Tail and Tail Bloom, engaging Freeze fades the network's per-line attenuation out to unity over 20 ms, leaving a lossless loop that holds exactly what's already circulating inside it - indefinitely, and it takes effect within a single audio block rather than waiting for a regeneration tick. Measured hold stability: within ±0.2 dB over twenty seconds. In Classic Convolution, Freeze still works the way it always has - bounded by the Decay setting, up to 10 seconds - because a finite convolution kernel is what it is. That's a deliberate tradeoff rather than an oversight: a design with no feedback path to filter repeatedly structurally cannot develop the progressive high-frequency dulling or the audible periodicity that feedback-loop-style "infinite reverb" designs are documented to risk over long holds.
+
+**Your existing sessions are unaffected, and that's tested, not just intended.** All ten new v0.3.0 parameters default to neutral, and the wet-path filters and ducker are *structurally* bypassed at their defaults (not merely multiplied by one) - a pre-v0.3.0 session loaded into v0.3.0 renders bit-identically to a fresh instance at the same settings, and the eleven pre-existing factory presets are unchanged.
+
+**Engineering hygiene:** 134 test cases run on macOS and Windows on every push, plus pluginval at strictness 10 and `auval -strict` - covering zero heap allocations on the audio thread in all three engine modes (including mid-stream Freeze and mode switches), zero reported latency across the full sample-rate range, and a dedicated regression test for the kernel-reload race condition between the message thread and the audio thread.
+
 ## Presets
 
 The preset bar at the top of the editor (`[<] [PresetName] [>] [Save] [Save As...] [Delete] [Import...] [Export...]`) gives you eleven factory starting points (see `docs/presets.md` for what each one is voiced for) plus your own saved presets, stored per-user at `~/Library/Audio/Presets/Yves Vogl/Requiem/` on macOS (`%APPDATA%/Yves Vogl/Requiem/Presets/` on Windows):
@@ -177,3 +199,14 @@ The interface follows your system language automatically (English by default, Ge
 - **Mono-compatibility check**: sum to mono periodically if you're running Width above ~150%, especially on a bus that might get folded to mono downstream (broadcast, some streaming platforms).
 - **A space feels "too small" or "too big" for its Decay**: reach for Size before changing Decay or Space - it adjusts the apparent dimensions without touching how long the tail actually rings.
 - **Low end building up mud in a dense mix**: pull Bass Decay down toward 100% or below (rather than shortening Decay overall, which would also shorten the mid/high tail you may still want).
+
+## Known limitations (v0.3.0)
+
+- **Hybrid Tail's echo density builds up gradually at the handover, not instantly.** The FDN branch is excited by an impulse, so its own reflection density climbs over the first several hundred milliseconds after the splice rather than starting dense - a known, measured characteristic of this release rather than a tuning bug, and it climbs steadily and predictably rather than sitting flat.
+- **Hybrid Tail's spectral balance at the splice point matches within a few dB, not within one.** Matching it more tightly would mean rendering the whole network offline for every parameter change, which would break the fast, click-free re-solve that's the point of Hybrid mode - so the analytic route is used instead, at the cost of a small (single-digit dB) tilt right at the handover.
+- **Matrix modulation's sidebands are audible by design, not suppressed to inaudibility.** They are the movement the feature exists to produce. What's held to a tight, tested bound is pitch stability (under one cent at full depth) - not the sidebands themselves.
+- **No published CPU figure.** There is no CPU benchmark or CI performance gate in this project, so treat any CPU-usage number you see elsewhere as unverified. Long Decay values do cost proportionally more CPU and memory, since Decay also sets the generated kernel's length.
+- **The v0.2.0 voicing is research-derived, not measured against hardware or a commercial plugin.** It's sourced from public manuals, developer interviews, trade-press reviews and room-acoustics literature; no hardware unit or commercial plugin's actual output was measured, and no third-party impulse response was sampled or approximated.
+- **The procedural generator is a simplified model** - a filtered-noise-burst tail plus a discrete early-reflection train - rather than a physical simulation of a real room's modal behaviour or exact reflection geometry. It's built for a convincing cinematic wash, not for acoustic measurement accuracy.
+- **The GUI is a functional slider/combo/toggle editor.** The custom vector-drawn GUI is a later milestone.
+- **Pre-1.0, AGPLv3.** Breaking changes remain possible until v1.0.0.
