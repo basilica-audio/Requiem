@@ -5,6 +5,7 @@
 #include <array>
 #include <memory>
 
+#include "PluginEditorLayout.h"
 #include "gui/AdditiveGlow.h"
 #include "gui/HubNeedle.h"
 #include "gui/InvisibleKnob.h"
@@ -35,14 +36,14 @@ class RequiemAudioProcessor;
 //      (paint()) - see docs/gui-mapping.md for why (no pressed-state crop
 //      asset exists for this design revision, unlike tubecomp's
 //      toggle-N-down.png family).
-//
-// Known scope decision (see docs/gui-mapping.md): the M1/M2-era "Load IR..."
-// / "Clear IR" file-chooser controls are NOT present in this revision - the
-// alchemie asset set's two physical buttons are already accounted for
-// (Freeze + one reserved/baked spare), and the briefing scopes this pass to
-// the 5-knob/2-button/1-needle photoreal mapping. Flagged here rather than
-// silently dropped; a follow-up revision could reclaim the reserved button
-// or a knob long-press/right-click for this.
+//   7. IR override button (buttonRight1x): opens a juce::PopupMenu
+//      ("Load IR..." / "Use procedural IR") wired to the existing,
+//      unmodified user-IR backend (RequiemAudioProcessor::
+//      loadUserImpulseResponseFile()/clearUserImpulseResponseFile()/
+//      isUsingUserImpulseResponse()). Reuses the Freeze button's own vector
+//      overlay technique for both its transient pressed-state darken and,
+//      while a user IR is active, a persistent subtle brightness LIFT
+//      (paint()) - see docs/gui-mapping.md's button-mapping table.
 class RequiemAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                           private juce::Timer
 {
@@ -76,6 +77,8 @@ private:
     void configureKnob (Knob& knob, const juce::String& parameterId, const juce::String& labelText);
     void applyScaleStep (int newStepIndex);
     void cycleScale();
+    void showIrMenu();
+    void repaintButtonZone (const rqm::layout::ButtonSlot1x& slot) noexcept;
 
     RequiemAudioProcessor& audioProcessor;
 
@@ -103,6 +106,23 @@ private:
     // docs/gui-mapping.md's mapping table). Bound to buttonLeft1x.
     std::unique_ptr<juce::ToggleButton> freezeButton;
     std::unique_ptr<ButtonAttachment> freezeAttachment;
+
+    // IR override entry point (buttonRight1x) - restores the pre-M3 editor's
+    // "Load IR..."/"Clear IR" feature through a juce::PopupMenu ("Load IR..."
+    // / "Use procedural IR") rather than dedicated buttons/label, since only
+    // one physical button remains. No APVTS attachment: the user-IR override
+    // is processor-owned file state, not a parameter (see PluginProcessor.h's
+    // loadUserImpulseResponseFile()/clearUserImpulseResponseFile()/
+    // isUsingUserImpulseResponse()).
+    std::unique_ptr<juce::TextButton> irButton;
+    std::unique_ptr<juce::FileChooser> irFileChooser;
+
+    // Cache of isUsingUserImpulseResponse(), polled once per timer tick
+    // (timerCallback()) so the persistent "lit" marker overlay repaints
+    // promptly if the active/procedural state changes for a reason other
+    // than this button's own menu (e.g. a host reloading session state with
+    // a previously-saved user IR while the editor is already open).
+    bool irButtonLitCache = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RequiemAudioProcessorEditor)
 };

@@ -54,12 +54,13 @@ popup-only"); popup-only was chosen because:
 | Button | Position | Parameter | Visual feedback |
 |---|---|---|---|
 | Left | `buttonLeft1x` (117, 306) | **Freeze** (the only `AudioParameterBool` in Requiem's APVTS) | A minimal vector darken overlay (`fillEllipse` at 22% black alpha) drawn in `PluginEditor::paint()` when engaged. |
-| Right | `buttonRight1x` (782, 306) | **none — left baked** | No component; the master's own baked pose shows through unmodified. |
+| Right | `buttonRight1x` (782, 306) | **IR override** — opens a `juce::PopupMenu` ("Load IR..." / "Use procedural IR") wired to the pre-existing, unmodified `RequiemAudioProcessor::loadUserImpulseResponseFile()`/`clearUserImpulseResponseFile()`/`isUsingUserImpulseResponse()` backend | Two independent overlays, same vector technique as Freeze: a transient pressed-state darken (22% black, `isDown()`), and a **persistent** subtle brightness lift (18% white) drawn whenever `isUsingUserImpulseResponse()` is true, so the override reads as "engaged" at a glance. |
 
 Requiem's APVTS has exactly one boolean parameter (`freeze`); every other
 parameter is a continuous float or a multi-choice combo, neither of which
-fits the button metaphor. Per the briefing ("if none exist, leave baked and
-document"), the second button is intentionally inert this revision.
+fits the button metaphor. The right button therefore doesn't drive an APVTS
+parameter at all — it is the IR-override entry point (see below), matching
+the button count the alchemie design actually ships (two).
 
 The Freeze button's pressed-state affordance is a plain vector overlay, not
 an extracted asset, because the alchemie asset set (unlike tubecomp's
@@ -68,19 +69,49 @@ either button. Verified against the raw master crop (see
 `docs/gui-preview.png`): the overlay measurably darkens the button (patch
 mean RGB drops from ~(63,65,82) unlit to ~(41,43,49) engaged) while staying
 subtle enough not to compete visually with the two additive light zones.
+The IR override button's own two overlays reuse this exact technique
+(`PluginEditor::repaintButtonZone()` factors the shared scaled-rect repaint
+math both buttons' `onStateChange`/state-poll handlers use) — 22% black for
+the transient press, and a separate 18% white lift for the persistent
+"user IR active" marker, layered on top of it so a click while already
+engaged still shows visible press feedback.
 
-## Known scope decision: IR file loading removed
+## IR override menu (right button)
 
-The pre-M3 editor's "Load IR..." / "Clear IR" file-chooser controls and IR
-status label are **not present** in this revision. The alchemie asset set's
-two physical buttons are both accounted for (Freeze + one reserved/baked
-spare — see above), and the briefing scopes this pass to the photoreal
-5-knob/2-button/1-needle mapping, not a redesign of the IR-override UX. This
-is flagged here explicitly rather than silently dropped — `PluginProcessor`
-still supports `loadUserImpulseResponseFile()`/`clearUserImpulseResponseFile()`
-and the state persists correctly (see `tests/StateTests.cpp`), just with no
-GUI entry point in this revision. A follow-up could reclaim the reserved
-right button, or add a right-click/long-press menu on a knob, for this.
+Restores the pre-M3 editor's "Load IR..." / "Clear IR" file-chooser feature
+— previously flagged in this document as removed with no GUI entry point —
+through the reserved right button rather than dedicated controls, since the
+alchemie design has only two physical buttons. `PluginEditor::showIrMenu()`
+builds a two-item `juce::PopupMenu`:
+
+- **"Load IR..."** — always enabled. Opens an async `juce::FileChooser`
+  (`*.wav;*.aif;*.aiff`, `openMode | canSelectFiles`) via `launchAsync()`;
+  on a result, hands the file straight to the processor's own
+  `loadUserImpulseResponseFile()` (unchanged — still validates readable
+  audio, `<=30s`, and gracefully no-ops on a bogus file; see
+  `CLAUDE.md`'s DSP section).
+- **"Use procedural IR"** — ticked when procedural is already the active
+  source (`! isUsingUserImpulseResponse()`), and only *enabled* when a user
+  IR is currently overriding it (`isUsingUserImpulseResponse()`) — i.e.
+  disabled once procedural is already active, since there is nothing left
+  to clear. Clicking it calls `clearUserImpulseResponseFile()`.
+
+Both the menu itself (`PopupMenu::showMenuAsync`) and the file browse
+(`FileChooser::launchAsync`) are async-only — no blocking `PopupMenu::show()`
+or modal `FileChooser::browseFor...` call is used anywhere in this path,
+per JUCE 8.0.14's own "no modal loops in plugin editors" guidance
+(`juce_PopupMenu.h`/`juce_FileChooser.h`, this repo's pinned checkout at
+`~/.cache/CPM/juce`), even though this CMake config sets
+`JUCE_MODAL_LOOPS_PERMITTED=1` for other reasons.
+
+The active/procedural state is not an APVTS parameter, so there is no
+attachment to drive the lit-marker overlay from; `PluginEditor::paint()`
+reads `isUsingUserImpulseResponse()` directly (always current), and the 30
+Hz `timerCallback()` additionally polls it once per tick purely to decide
+*when* to `repaint()` that zone — this catches the state changing for a
+reason other than this button's own menu (e.g. a host reloading session
+state, with a previously-saved user IR path, while the editor is already
+open).
 
 ## Windows
 

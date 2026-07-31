@@ -88,6 +88,38 @@ TEST_CASE ("Freeze's accessible name matches its visual label and exposes a chec
     CHECK (handler->getCurrentState().isCheckable());
 }
 
+TEST_CASE ("IR override button exposes an accessible title, a press action, and is keyboard-operable", "[gui][a11y]")
+{
+    RequiemAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+    RequiemAudioProcessorEditor editor (processor);
+
+    auto* irButton = findChildByTitle<juce::TextButton> (editor, "Impulse response loader");
+    REQUIRE (irButton != nullptr);
+    CHECK (irButton->getTitle() == juce::String ("Impulse response loader"));
+
+    // Keyboard-operable via JUCE's ordinary Button focus/key handling (no
+    // custom keyPressed() override needed) - Button::Button() itself calls
+    // setWantsKeyboardFocus(true) (JUCE 8.0.14 juce_Button.cpp), so
+    // Enter/Space trigger onClick through the base class's own key handling.
+    CHECK (irButton->getWantsKeyboardFocus());
+
+    // The click handler (opens the "Load IR.../Use procedural IR" menu) is
+    // wired - not invoked here, since triggering it would launch a real
+    // async juce::PopupMenu with no native window/message loop available in
+    // this headless, no-message-loop test binary (see this file's top-of-file
+    // docs).
+    CHECK (irButton->onClick != nullptr);
+
+    const auto handler = createHandlerForTest (*irButton);
+    REQUIRE (handler != nullptr);
+    CHECK (handler->getRole() == juce::AccessibilityRole::button);
+    CHECK (handler->getActions().contains (juce::AccessibilityActionType::press));
+
+    // Momentary menu launcher, not a toggle - unlike Freeze above.
+    CHECK_FALSE (handler->getCurrentState().isCheckable());
+}
+
 TEST_CASE ("The needle (output level meter) exposes a read-only accessible value inside the real editor", "[gui][a11y]")
 {
     RequiemAudioProcessor processor;

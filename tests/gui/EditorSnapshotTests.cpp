@@ -3,10 +3,49 @@
 #include "PluginProcessor.h"
 #include "gui/HubNeedle.h"
 
+#include <juce_audio_formats/juce_audio_formats.h>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
 #include <vector>
+
+namespace
+{
+    // Writes a short, valid stereo WAV file to a temp location and returns
+    // it - for the IR-override lit-marker test below, which needs a real
+    // user IR active without going through the button's own async
+    // juce::FileChooser (see tests/StateTests.cpp for the sibling copy of
+    // this helper; kept local rather than shared, matching this repo's
+    // existing per-file convention for small test-only fixtures). The
+    // caller is responsible for deleting it afterwards.
+    juce::File writeTestImpulseResponseFileForGuiTest()
+    {
+        auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                        .getChildFile ("requiem_gui_test_ir_" + juce::String (juce::Random::getSystemRandom().nextInt64()) + ".wav");
+
+        juce::WavAudioFormat wavFormat;
+        std::unique_ptr<juce::OutputStream> stream (file.createOutputStream().release());
+        REQUIRE (stream != nullptr);
+
+        auto writer = wavFormat.createWriterFor (stream,
+            juce::AudioFormatWriterOptions()
+                .withSampleRate (48000.0)
+                .withNumChannels (2)
+                .withBitsPerSample (16));
+        REQUIRE (writer != nullptr);
+
+        juce::AudioBuffer<float> irBuffer (2, 256);
+        irBuffer.clear();
+        irBuffer.setSample (0, 0, 1.0f);
+        irBuffer.setSample (1, 0, 1.0f);
+
+        writer->writeFromAudioSampleBuffer (irBuffer, 0, irBuffer.getNumSamples());
+        writer.reset(); // flush/close before loadUserImpulseResponseFile() reads it back
+
+        return file;
+    }
+}
 
 // GUI smoke tests for the M3 photoreal "alchemie" editor (src/PluginEditor.h,
 // src/gui/). juce::ScopedJuceInitialiser_GUI is installed once for the whole
@@ -249,4 +288,57 @@ TEST_CASE ("Bezel startup glow is dark at t=0, overshoots mid-animation, then se
     // idle animation).
     const auto atSettledAgain = sampleAt (5.0);
     CHECK (atSettledAgain == atSettled);
+}
+
+// The IR override entry point's "engaged" affordance (docs/gui-mapping.md's
+// button-mapping table): a persistent brightness LIFT on the right button
+// while a user-supplied impulse response is active, driven directly by
+// RequiemAudioProcessor::isUsingUserImpulseResponse() - loads a real IR
+// straight through the processor's own backend (unchanged, pre-existing
+// API), bypassing the button's own async juce::FileChooser, since this test
+// only needs to prove the paint()-side wiring reacts to that state.
+TEST_CASE ("IR override lit marker brightens the right button only while a user IR is active", "[gui]")
+{
+    RequiemAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+
+    RequiemAudioProcessorEditor editor (processor);
+    REQUIRE (editor.getWidth() > 0);
+    REQUIRE (editor.getHeight() > 0);
+
+    const auto irButtonProbeScreenPoint = [&]
+    {
+        // Same @1x-as-screen-coords convention as bezelProbeScreenPoint
+        // above (scale is 1.0/100% at construction, so no scaling needed).
+        using namespace rqm::layout;
+        return juce::Point<int> (buttonRight1x.cx1x, topStripHeight1x + topStripGap1x + buttonRight1x.cy1x);
+    }();
+
+    const auto snapshotPixelAtProbe = [&]
+    {
+        const auto snapshot = editor.createComponentSnapshot (editor.getLocalBounds(), true, 1.0f, juce::SoftwareImageType {});
+        REQUIRE (snapshot.isValid());
+        return snapshot.getPixelAt (irButtonProbeScreenPoint.x, irButtonProbeScreenPoint.y);
+    };
+
+    const auto luminance = [] (juce::Colour c) { return 0.299f * (float) c.getRed() + 0.587f * (float) c.getGreen() + 0.114f * (float) c.getBlue(); };
+
+    REQUIRE_FALSE (processor.isUsingUserImpulseResponse());
+    const auto beforeLoad = snapshotPixelAtProbe();
+
+    const auto irFile = writeTestImpulseResponseFileForGuiTest();
+    REQUIRE (processor.loadUserImpulseResponseFile (irFile));
+    irFile.deleteFile(); // the boolean flip alone (not the async regenerated audio) is what this test checks
+
+    const auto afterLoad = snapshotPixelAtProbe();
+
+    INFO ("before-load luminance = " << luminance (beforeLoad) << ", after-load luminance = " << luminance (afterLoad));
+    CHECK (luminance (afterLoad) > luminance (beforeLoad));
+
+    processor.clearUserImpulseResponseFile();
+    const auto afterClear = snapshotPixelAtProbe();
+
+    INFO ("after-clear luminance = " << luminance (afterClear));
+    CHECK (luminance (afterClear) < luminance (afterLoad));
+    CHECK (afterClear == beforeLoad);
 }
