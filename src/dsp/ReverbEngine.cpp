@@ -53,6 +53,13 @@ ReverbEngine::~ReverbEngine()
 //==============================================================================
 void ReverbEngine::prepare (const juce::dsp::ProcessSpec& spec)
 {
+    // See the class-level THREADING comment (ReverbEngine.h): the host may
+    // call prepareToPlay() -> this method from any non-audio thread, and
+    // the background "Requiem IR Render" thread's renderOnce() call reads/
+    // writes the same sampleRate/numChannels/fdnTail state this method
+    // mutates below - both must be serialised against each other.
+    const std::lock_guard<std::recursive_mutex> reconfigureLock (reconfigureMutex);
+
     sampleRate = spec.sampleRate;
     numChannels = static_cast<int> (spec.numChannels);
     maximumBlockSize = static_cast<int> (spec.maximumBlockSize);
@@ -314,6 +321,16 @@ void ReverbEngine::setDuckReleaseMs (float newReleaseMs)  { wetChain.setDuckRele
 //==============================================================================
 ReverbEngine::RenderRequest ReverbEngine::buildRequest() const
 {
+    // usingUserImpulseResponse/userImpulseResponseFile below are plain,
+    // unsynchronised members written by loadUserImpulseResponse()/
+    // clearUserImpulseResponse() from either the message thread (GUI) or
+    // the host thread (setStateInformation()) - see the class-level
+    // THREADING comment. reconfigureMutex is recursive, so this is safe to
+    // call both directly (regenerateImpulseResponseIfNeeded(), the message
+    // thread) and from callers that already hold the lock (prepare(),
+    // loadUserImpulseResponse(), clearUserImpulseResponse()).
+    const std::lock_guard<std::recursive_mutex> reconfigureLock (reconfigureMutex);
+
     RenderRequest request;
     request.decaySeconds = requestedDecaySeconds.load (std::memory_order_relaxed);
     request.dampingHz = requestedDampingHz.load (std::memory_order_relaxed);
@@ -401,7 +418,15 @@ void ReverbEngine::runRenderLoop()
                 request = requestedRender;
             }
 
-            renderOnce (request);
+            // Deliberately NOT held across the requestLock-protected block
+            // above/below - only the render call itself needs to be
+            // mutually exclusive with prepare() (see the class-level
+            // THREADING comment), which reads/writes the very same
+            // sampleRate/numChannels/fdnTail state renderOnce() does.
+            {
+                const std::lock_guard<std::recursive_mutex> reconfigureLock (reconfigureMutex);
+                renderOnce (request);
+            }
 
             {
                 const juce::ScopedLock lock (requestLock);
@@ -635,7 +660,10 @@ bool ReverbEngine::loadUserImpulseResponse (const juce::File& file)
     // Sanity-check that the file really is readable audio (and not
     // pathologically long) before anything else changes, so a bogus or
     // mis-selected file leaves the currently active impulse response - and
-    // therefore what the plugin is producing - completely untouched.
+    // therefore what the plugin is producing - completely untouched. Done
+    // outside reconfigureMutex: it is pure file I/O with no shared-state
+    // access, and holding the lock across a filesystem read would needlessly
+    // block prepare()/renderOnce() for its duration.
     std::unique_ptr<juce::AudioFormatReader> reader (userIrFormatManager.createReaderFor (file));
 
     if (reader == nullptr || reader->numChannels == 0 || reader->lengthInSamples <= 0 || reader->sampleRate <= 0.0)
@@ -647,6 +675,15 @@ bool ReverbEngine::loadUserImpulseResponse (const juce::File& file)
     if (durationSeconds > maxUserImpulseResponseSeconds)
         return false;
 
+    // usingUserImpulseResponse/userImpulseResponseFile are read by prepare()
+    // (host thread) and buildRequest() (any of prepare()/
+    // regenerateImpulseResponseIfNeeded()/this method's own caller) - see
+    // the class-level THREADING comment. This method's own two real callers
+    // (RequiemAudioProcessor::loadUserImpulseResponseFile(), message thread,
+    // and setStateInformation(), host thread) are exactly the two
+    // unsynchronised non-audio threads that bug class is about.
+    const std::lock_guard<std::recursive_mutex> reconfigureLock (reconfigureMutex);
+
     usingUserImpulseResponse = true;
     userImpulseResponseFile = file;
 
@@ -656,6 +693,8 @@ bool ReverbEngine::loadUserImpulseResponse (const juce::File& file)
 
 void ReverbEngine::clearUserImpulseResponse()
 {
+    const std::lock_guard<std::recursive_mutex> reconfigureLock (reconfigureMutex);
+
     if (! usingUserImpulseResponse)
         return;
 
