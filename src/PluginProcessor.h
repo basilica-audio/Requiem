@@ -61,6 +61,14 @@ public:
     bool isUsingUserImpulseResponse() const noexcept { return engine.isUsingUserImpulseResponse(); }
     juce::File getUserImpulseResponseFile() const { return engine.getUserImpulseResponseFile(); }
 
+    // M3 GUI metering (src/gui/HubNeedle.h via PluginEditor): the
+    // instantaneous post-engine output magnitude, written from
+    // processBlock() as a plain atomic store (real-time safe - no
+    // allocation/locks). Ballistic smoothing happens entirely on the GUI
+    // side (HubNeedle::tick()), mirroring basilica-audio/aureate's
+    // currentGrDb/currentOutputLevelDb pattern.
+    float getCurrentOutputLevelDb() const noexcept { return currentOutputLevelDb.load (std::memory_order_relaxed); }
+
     juce::AudioProcessorValueTreeState apvts;
 
     // M2 preset system (.scaffold/specs/preset-system-m2.md). Declared
@@ -82,6 +90,10 @@ private:
     void timerCallback() override;
 
     ReverbEngine engine;
+
+    // See getCurrentOutputLevelDb() above. -100.0f is the same "effectively
+    // silent" floor basilica-audio/aureate's own metering atomics use.
+    std::atomic<float> currentOutputLevelDb { -100.0f };
 
     // Raw atomic pointers into the APVTS-managed parameter values, resolved
     // once at construction time so processBlock() never has to search for

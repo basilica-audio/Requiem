@@ -1,60 +1,97 @@
 #include "PluginEditor.h"
+#include "PluginEditorLayout.h"
 #include "PluginProcessor.h"
 #include "params/ParameterIds.h"
 #include "presets/Localisation.h"
 
 #include <BinaryData.h>
 
+#include <array>
+#include <cmath>
+#include <utility>
+
 namespace
 {
-    constexpr int knobSize = 90;
-    constexpr int textBoxHeight = 20;
-    constexpr int labelHeight = 20;
-    constexpr int margin = 20;
-    constexpr int numKnobs = 6;
-    constexpr int editorWidth = margin * 2 + numKnobs * knobSize + (numKnobs - 1) * margin;
+    // Base (@1x, 100% scale) faceplate geometry lives in PluginEditorLayout.h
+    // (rqm::layout) rather than here, so tests/gui/EditorLayoutTests.cpp can
+    // assert layout invariants against the exact constants this file lays
+    // components out with.
+    using namespace rqm::layout;
 
-    constexpr int presetBarHeight = 28;
+    struct KnobLayoutEntry
+    {
+        int slotIndex;          // index into rqm::layout::knobSlots1x
+        const char* parameterId;
+        const char* labelText;  // accessible name only - no baked text labels
+    };
 
-    // Second row: Space combo + Early/Late Balance knob + Modulation knob +
-    // Freeze toggle.
-    constexpr int secondRowHeight = knobSize;
-    constexpr int spaceComboWidth = 140;
-    constexpr int freezeButtonWidth = 90;
+    // Mapping decided for this M3 GUI pass (docs/gui-mapping.md has the full
+    // rationale table): the centre knob (slot 2, the larger octagonal
+    // crystal) carries Mix, the single most load-bearing control for a
+    // reverb's dry/wet blend. The four ring-lit outer knobs carry the next
+    // tier of continuous controls, reading left-to-right as two "time"
+    // controls flanking the mix (Decay, Pre-Delay) and two "space/tone"
+    // controls on the right (Damping, Size) - a deliberate signal-flow-ish
+    // grouping given only 5 physical knob positions exist in this design
+    // (vs. aureate's 10). Every other Requiem parameter (Width, Output,
+    // Space, Early/Late Balance, Modulation, Bass Decay, and the whole
+    // v0.3.0 "Living Tail" set) stays host-automatable/preset-only, not
+    // physically knobbed this revision - same trade-off aureate's own M3
+    // pilot made reducing its 21-parameter set down to 10 physical knobs.
+    constexpr std::array<KnobLayoutEntry, 5> knobLayout {{
+        { 0, ParamIDs::decay, "Decay" },
+        { 1, ParamIDs::preDelay, "Pre-Delay" },
+        { 2, ParamIDs::mix, "Mix" },
+        { 3, ParamIDs::damping, "Damping" },
+        { 4, ParamIDs::size, "Size" },
+    }};
 
-    // Third row (v0.2.0 additions): Size knob + Bass Decay knob.
-    constexpr int thirdRowHeight = knobSize;
+    // Requiem's needle displays the processor's own post-engine output
+    // level (RequiemAudioProcessor::getCurrentOutputLevelDb(), already
+    // atomic/real-time-safe - see PluginProcessor.h's docs), mapped
+    // directly across the dial's own measured sweep - see
+    // src/gui/HubNeedle.cpp's `ticks` table for the exact two calibration
+    // points (this function exists only so PluginEditor.cpp doesn't need
+    // to know HubNeedle's internal representation is "degrees"; HubNeedle
+    // itself does the dB->angle mapping).
+    float needleDbFromOutputLevelDb (float outputLevelDb) noexcept
+    {
+        return juce::jlimit (needleLevelFloorDb, needleLevelCeilingDb, outputLevelDb);
+    }
 
-    // Fourth row (v0.3.0): Engine combo + Tail Mod Mode combo + Tail Mod Depth
-    // + Tail Mod Rate + Bloom.
-    constexpr int fourthRowHeight = knobSize;
-    constexpr int engineComboWidth = 170;
-    constexpr int tailModComboWidth = 110;
+    juce::Image loadImage (const char* data, int size)
+    {
+        return juce::ImageCache::getFromMemory (data, size);
+    }
 
-    // Fifth row (v0.3.0): the wet chain - Low Cut, High Cut, Duck, Duck Attack,
-    // Duck Release.
-    constexpr int fifthRowHeight = knobSize;
-
-    constexpr int irRowHeight = 30;
-    constexpr int editorHeight = margin * 8 + presetBarHeight + labelHeight + knobSize + textBoxHeight
-                                  + secondRowHeight + thirdRowHeight + fourthRowHeight + fifthRowHeight
-                                  + irRowHeight;
-
-    // M2 i18n frame (.scaffold/specs/preset-system-m2.md): selects German
-    // (resources/i18n/de.txt) or falls through to English, once, at editor
-    // construction - see Localisation.h's docs. `presetBar` is a member
-    // initialised via the constructor's initialiser list, and its own
-    // constructor already calls TRANS() on every button label - member
-    // initialisers run in declaration order regardless of the order
-    // they're written in, so this helper (called from presetBar's own
-    // initialiser expression below) is what actually guarantees
-    // installLocalisation() runs before presetBar exists, not an
-    // installLocalisation() call in the constructor *body*, which would run
-    // too late.
+    // M2 i18n frame: selects German (resources/i18n/de.txt) or falls through
+    // to English, once, at editor construction - see Localisation.h's docs.
     basilica::presets::PresetManager& initLocalisationThenGetPresetManager (RequiemAudioProcessor& processor)
     {
         basilica::presets::installLocalisation (BinaryData::de_txt, BinaryData::de_txtSize);
         return processor.presetManager;
+    }
+
+    // Non-parameter, per-session UI state: the stepped scale choice (0/1/2)
+    // stored as a plain property directly on apvts.state.
+    constexpr const char* uiScaleStepProperty = "uiScaleStep";
+
+    // Startup bezel-glow animation curve: a standard "ease-out-back" cubic
+    // (f(0)=0, f(1)=1 exactly, rising above 1.0 partway through before
+    // settling back down to exactly 1.0 at x=1) - closed-form, so no spring
+    // simulation/state is needed. backC1=2.2 was tuned (see this file's own
+    // development notes / tests/gui/EditorSnapshotTests.cpp's numeric
+    // verification) to land the curve's own analytic peak at ~115.4%,
+    // matching the owner's brief ("brief overshoot (~115%)") - the peak
+    // occurs at x~=0.542, i.e. ~0.65s into the 1.2s animation window.
+    constexpr float backC1 = 2.2f;
+    constexpr float backC3 = backC1 + 1.0f;
+
+    float easeOutBackWithOvershoot (float x) noexcept
+    {
+        const auto clamped = juce::jlimit (0.0f, 1.0f, x);
+        const auto x1 = clamped - 1.0f;
+        return 1.0f + backC3 * x1 * x1 * x1 + backC1 * x1 * x1;
     }
 }
 
@@ -63,221 +100,326 @@ RequiemAudioProcessorEditor::RequiemAudioProcessorEditor (RequiemAudioProcessor&
       audioProcessor (processorToEdit),
       presetBar (initLocalisationThenGetPresetManager (processorToEdit))
 {
+    masterImage = loadImage (BinaryData::master_alchemie_png, BinaryData::master_alchemie_pngSize);
+
+    // Creation order doubles as the accessibility/keyboard focus order
+    // (JUCE's default FocusTraverser walks children in z-order, i.e.
+    // creation order) - kept matching visual reading order: preset bar +
+    // scale control, the needle/moon-dial, the knob row left-to-right, then
+    // Freeze.
     addAndMakeVisible (presetBar);
 
-    configureKnob (decayKnob, ParamIDs::decay, "Decay");
-    configureKnob (preDelayKnob, ParamIDs::preDelay, "Pre-Delay");
-    configureKnob (dampingKnob, ParamIDs::damping, "Damping");
-    configureKnob (widthKnob, ParamIDs::width, "Width");
-    configureKnob (mixKnob, ParamIDs::mix, "Mix");
-    configureKnob (outputKnob, ParamIDs::output, "Output");
+    scaleButton.setComponentID ("scaleButton");
+    scaleButton.onClick = [this] { cycleScale(); };
+    addAndMakeVisible (scaleButton);
 
-    spaceLabel.setText ("Space", juce::dontSendNotification);
-    spaceLabel.setJustificationType (juce::Justification::centred);
-    spaceLabel.attachToComponent (&spaceCombo, false);
-    addAndMakeVisible (spaceLabel);
+    basilica::gui::HubNeedle::Assets needleAssets;
+    needleAssets.needleSprite = loadImage (BinaryData::needle_alchemie_png, BinaryData::needle_alchemie_pngSize);
+    needle = std::make_unique<basilica::gui::HubNeedle> (
+        needleAssets, "Output level meter",
+        needleSpritePivotFraction, needleSpritePivotFraction,
+        needleSpriteSizeFraction, needleBakedAngleDeg);
+    addAndMakeVisible (*needle);
 
-    // Populate the combo directly from the parameter's own choices, so the
-    // GUI can never drift out of sync with ParameterLayout.cpp's ordering.
-    if (auto* spaceParam = dynamic_cast<juce::AudioParameterChoice*> (audioProcessor.apvts.getParameter (ParamIDs::space)))
+    for (size_t i = 0; i < knobLayout.size(); ++i)
     {
-        int itemId = 1;
-        for (const auto& choice : spaceParam->choices)
-            spaceCombo.addItem (choice, itemId++);
+        auto& entry = knobLayout[i];
+        knobs[(size_t) entry.slotIndex].slider = std::make_unique<basilica::gui::InvisibleKnob>();
+        configureKnob (knobs[(size_t) entry.slotIndex], entry.parameterId, entry.labelText);
     }
-    addAndMakeVisible (spaceCombo);
-    spaceAttachment = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, ParamIDs::space, spaceCombo);
 
-    configureKnob (earlyLateBalanceKnob, ParamIDs::earlyLateBalance, "Early/Late");
-    configureKnob (modulationKnob, ParamIDs::modulation, "Modulation");
-
-    configureKnob (sizeKnob, ParamIDs::size, "Size");
-    configureKnob (bassDecayKnob, ParamIDs::bassDecay, "Bass Decay");
-
-    //==========================================================================
-    // v0.3.0 "Living Tail" parameters. Same pattern as everything above: both
-    // combos are populated straight from their parameter's own choice list, so
-    // the editor can never drift out of sync with ParameterLayout.cpp's
-    // ordering - which matters more than usual here, because those indices map
-    // onto ReverbEngine::EngineMode and FdnTail::ModulationMode.
-    const auto configureChoiceCombo = [this] (juce::Label& label, juce::ComboBox& combo,
-                                               std::unique_ptr<ComboBoxAttachment>& attachment,
-                                               const juce::String& parameterId, const juce::String& labelText)
+    const struct
     {
-        label.setText (labelText, juce::dontSendNotification);
-        label.setJustificationType (juce::Justification::centred);
-        label.attachToComponent (&combo, false);
-        addAndMakeVisible (label);
+        const char* data;
+        int size;
+    } glowKnobAssets[4] = {
+        { BinaryData::glow_knob_1_png, BinaryData::glow_knob_1_pngSize },
+        { BinaryData::glow_knob_2_png, BinaryData::glow_knob_2_pngSize },
+        { BinaryData::glow_knob_3_png, BinaryData::glow_knob_3_pngSize },
+        { BinaryData::glow_knob_4_png, BinaryData::glow_knob_4_pngSize },
+    };
 
-        if (auto* param = dynamic_cast<juce::AudioParameterChoice*> (audioProcessor.apvts.getParameter (parameterId)))
+    for (size_t i = 0; i < knobRingZones.size(); ++i)
+    {
+        const auto& zone = knobRingZones[i];
+        const auto glowImage = loadImage (glowKnobAssets[i].data, glowKnobAssets[i].size);
+        knobRingGlows[i] = basilica::gui::AdditiveGlow (
+            masterImage, glowImage, { zone.zoneOffsetXMasterPx, zone.zoneOffsetYMasterPx }, 1.0f, 1.0f);
+
+        // Signature behaviour #1: the ring updates immediately on every
+        // drag/automation write, not on a poll - see class docs.
+        if (auto* slider = knobs[(size_t) zone.knobSlotIndex].slider.get())
         {
-            int itemId = 1;
-
-            for (const auto& choice : param->choices)
-                combo.addItem (choice, itemId++);
+            slider->onValueChange = [this, i]
+            {
+                const auto& z = knobRingZones[i];
+                const auto scale = scaleSteps[(size_t) scaleStepIndex];
+                const auto s = [scale] (int v) { return (int) std::lround ((float) v * scale); };
+                const auto yOffset = s (topStripHeight1x + topStripGap1x);
+                repaint (juce::Rectangle<int> (s (z.zoneX1x), yOffset + s (z.zoneY1x), s (z.zoneW1x), s (z.zoneH1x)).expanded (s (4)));
+            };
         }
+    }
 
-        addAndMakeVisible (combo);
-        attachment = std::make_unique<ComboBoxAttachment> (audioProcessor.apvts, parameterId, combo);
-    };
+    const auto bezelGlowImage = loadImage (BinaryData::glow_bezel_png, BinaryData::glow_bezel_pngSize);
+    bezelGlow = basilica::gui::AdditiveGlow (
+        masterImage, bezelGlowImage, { bezelGlowZoneMasterPx[0], bezelGlowZoneMasterPx[1] }, 1.0f, bezelOvershootPeakT);
+    bezelGlowStartTimeSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
 
-    configureChoiceCombo (engineModeLabel, engineModeCombo, engineModeAttachment, ParamIDs::engineMode, "Engine");
-    configureChoiceCombo (tailModModeLabel, tailModModeCombo, tailModModeAttachment, ParamIDs::tailModMode, "Tail Mod");
-
-    configureKnob (tailModDepthKnob, ParamIDs::tailModDepth, "Mod Depth");
-    configureKnob (tailModRateKnob, ParamIDs::tailModRate, "Mod Rate");
-    configureKnob (bloomAmountKnob, ParamIDs::bloomAmount, "Bloom");
-
-    configureKnob (lowCutKnob, ParamIDs::lowCut, "Low Cut");
-    configureKnob (highCutKnob, ParamIDs::highCut, "High Cut");
-    configureKnob (duckAmountKnob, ParamIDs::duckAmount, "Duck");
-    configureKnob (duckAttackKnob, ParamIDs::duckAttack, "Duck Atk");
-    configureKnob (duckReleaseKnob, ParamIDs::duckRelease, "Duck Rel");
-
-    addAndMakeVisible (freezeButton);
-    freezeAttachment = std::make_unique<ButtonAttachment> (audioProcessor.apvts, ParamIDs::freeze, freezeButton);
-
-    loadIrButton.onClick = [this]
+    freezeButton = std::make_unique<juce::ToggleButton> (juce::String());
+    freezeButton->setColour (juce::ToggleButton::tickColourId, juce::Colours::transparentBlack);
+    freezeButton->setColour (juce::ToggleButton::tickDisabledColourId, juce::Colours::transparentBlack);
+    freezeButton->setColour (juce::ToggleButton::textColourId, juce::Colours::transparentBlack);
+    freezeButton->setTitle ("Freeze");
+    freezeButton->setName ("Freeze");
+    // The pressed-state darken overlay (paint()) is driven by the button's
+    // own toggle state, not a separate value copy - just repaint on change.
+    freezeButton->onStateChange = [this]
     {
-        fileChooser = std::make_unique<juce::FileChooser> ("Load impulse response...",
-                                                             juce::File(),
-                                                             "*.wav;*.aif;*.aiff");
-
-        constexpr auto chooserFlags = juce::FileBrowserComponent::openMode
-                                       | juce::FileBrowserComponent::canSelectFiles;
-
-        fileChooser->launchAsync (chooserFlags, [this] (const juce::FileChooser& chooser)
-        {
-            const auto file = chooser.getResult();
-
-            if (file != juce::File())
-                audioProcessor.loadUserImpulseResponseFile (file);
-
-            updateIrStatusLabel();
-        });
+        const auto scale = scaleSteps[(size_t) scaleStepIndex];
+        const auto s = [scale] (int v) { return (int) std::lround ((float) v * scale); };
+        const auto yOffset = s (topStripHeight1x + topStripGap1x);
+        const auto diameter = s (buttonLeft1x.diameter1x);
+        repaint (juce::Rectangle<int> (0, 0, diameter, diameter)
+                     .withCentre ({ s (buttonLeft1x.cx1x), yOffset + s (buttonLeft1x.cy1x) })
+                     .expanded (s (4)));
     };
-    addAndMakeVisible (loadIrButton);
-
-    clearIrButton.onClick = [this]
-    {
-        audioProcessor.clearUserImpulseResponseFile();
-        updateIrStatusLabel();
-    };
-    addAndMakeVisible (clearIrButton);
-
-    irStatusLabel.setJustificationType (juce::Justification::centredLeft);
-    addAndMakeVisible (irStatusLabel);
-    updateIrStatusLabel();
+    addAndMakeVisible (*freezeButton);
+    freezeAttachment = std::make_unique<ButtonAttachment> (audioProcessor.apvts, ParamIDs::freeze, *freezeButton);
 
     setResizable (false, false);
-    setSize (editorWidth, editorHeight);
+
+    const auto storedStep = (int) audioProcessor.apvts.state.getProperty (uiScaleStepProperty, 0);
+    applyScaleStep (juce::jlimit (0, (int) scaleSteps.size() - 1, storedStep));
+
+    startTimerHz (30);
 }
 
 RequiemAudioProcessorEditor::~RequiemAudioProcessorEditor() = default;
 
-void RequiemAudioProcessorEditor::configureKnob (Knob& knob, const juce::String& parameterId, const juce::String& labelText)
+void RequiemAudioProcessorEditor::cycleScale()
 {
-    knob.slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    knob.slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, knobSize, textBoxHeight);
-    addAndMakeVisible (knob.slider);
-
-    knob.label.setText (labelText, juce::dontSendNotification);
-    knob.label.setJustificationType (juce::Justification::centred);
-    // false => label sits above the slider it tracks; JUCE repositions it
-    // automatically whenever the slider's bounds change, so resized() only
-    // needs to place the sliders themselves.
-    knob.label.attachToComponent (&knob.slider, false);
-    addAndMakeVisible (knob.label);
-
-    knob.attachment = std::make_unique<SliderAttachment> (audioProcessor.apvts, parameterId, knob.slider);
+    applyScaleStep ((scaleStepIndex + 1) % (int) scaleSteps.size());
 }
 
-void RequiemAudioProcessorEditor::updateIrStatusLabel()
+void RequiemAudioProcessorEditor::applyScaleStep (int newStepIndex)
 {
-    if (audioProcessor.isUsingUserImpulseResponse())
-        irStatusLabel.setText ("IR: " + audioProcessor.getUserImpulseResponseFile().getFileName(), juce::dontSendNotification);
-    else
-        irStatusLabel.setText ("IR: procedural (Decay/Damping/Space)", juce::dontSendNotification);
+    scaleStepIndex = juce::jlimit (0, (int) scaleSteps.size() - 1, newStepIndex);
+    audioProcessor.apvts.state.setProperty (uiScaleStepProperty, scaleStepIndex, nullptr);
+
+    const auto percentText = juce::String ((int) (scaleSteps[(size_t) scaleStepIndex] * 100.0f)) + "%";
+    scaleButton.setButtonText (percentText);
+    scaleButton.setTitle ("Window scale, " + percentText);
+
+    const auto scale = scaleSteps[(size_t) scaleStepIndex];
+
+    setSize ((int) std::lround ((float) baseEditorWidth * scale),
+             (int) std::lround ((float) baseEditorHeight * scale));
+}
+
+void RequiemAudioProcessorEditor::configureKnob (Knob& knob, const juce::String& parameterId, const juce::String& labelText)
+{
+    knob.slider->setPopupDisplayEnabled (true, true, this);
+    knob.slider->setTitle (labelText);
+    knob.slider->setName (labelText);
+    addAndMakeVisible (*knob.slider);
+
+    if (auto* param = audioProcessor.apvts.getParameter (parameterId))
+    {
+        const auto defaultValue = param->getNormalisableRange().convertFrom0to1 (param->getDefaultValue());
+        knob.slider->setDoubleClickReturnValue (true, defaultValue);
+    }
+
+    // SliderAttachment MUST be constructed before the textFromValueFunction
+    // override below - JUCE 8.0.14's SliderParameterAttachment constructor
+    // itself assigns slider.textFromValueFunction as part of wiring the
+    // attachment, which would silently clobber an override set beforehand.
+    knob.attachment = std::make_unique<SliderAttachment> (audioProcessor.apvts, parameterId, *knob.slider);
+
+    if (auto* param = audioProcessor.apvts.getParameter (parameterId))
+    {
+        knob.slider->textFromValueFunction = [param] (double v)
+        {
+            return param->getText (param->convertTo0to1 ((float) v), 0) + " " + param->getLabel();
+        };
+        knob.slider->updateText();
+    }
+}
+
+void RequiemAudioProcessorEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colours::black);
+
+    const auto scale = scaleSteps[(size_t) scaleStepIndex];
+    const auto s = [scale] (float v) { return v * scale; };
+
+    const auto stripHeight = (float) topStripHeight1x * scale;
+    // Aubergine-toned strip, matching the alchemie panel's own palette
+    // (rather than tubecomp's amber) - sampled from
+    // brand/mocks/alchemie/master-03-glows-off.png's own panel colour.
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff231c2e), 0.0f, 0.0f,
+                                             juce::Colour (0xff0d0a10), 0.0f, stripHeight, false));
+    g.fillRect (juce::Rectangle<float> (0.0f, 0.0f, (float) getWidth(), stripHeight));
+    g.setColour (juce::Colour (0xff6a5a8a));
+    g.fillRect (juce::Rectangle<float> (0.0f, stripHeight - 1.0f * scale, (float) getWidth(), 1.0f * scale));
+
+    const auto plateOrigin = juce::Point<float> (0.0f, stripHeight + (float) topStripGap1x * scale);
+    const auto plateBounds = juce::Rectangle<float> (plateOrigin.x, plateOrigin.y,
+                                                      (float) plateWidth1x * scale, (float) plateHeight1x * scale);
+
+    const auto toScreenRect = [&] (int x1x, int y1x, int w1x, int h1x)
+    {
+        return juce::Rectangle<float> (plateOrigin.x + s ((float) x1x),
+                                       plateOrigin.y + s ((float) y1x),
+                                       s ((float) w1x),
+                                       s ((float) h1x));
+    };
+
+    g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+
+    // 1. Baseline plate: the single master render, filling the plate bounds.
+    // Bakes the aubergine panel, silver engravings, moon-dial bezel (unlit),
+    // 5 knobs (unlit ring channels), 2 buttons, 2 dark glass windows.
+    if (masterImage.isValid())
+        g.drawImage (masterImage, plateBounds, juce::RectanglePlacement::centred, false);
+
+    // (2. The 5 knobs are separate InvisibleKnob child components, drawn
+    // automatically after this method returns - they paint nothing but an
+    // occasional keyboard-focus ring, see InvisibleKnob.h.)
+
+    // 3. Knob ring glows (signature behaviour #1, ADDITIVE - see
+    // AdditiveGlow.h) - each of the 4 outer knobs' ring wedge, clipped to
+    // its own live normalised parameter value.
+    for (size_t i = 0; i < knobRingZones.size(); ++i)
+    {
+        const auto& zone = knobRingZones[i];
+        const auto destRect = toScreenRect (zone.zoneX1x, zone.zoneY1x, zone.zoneW1x, zone.zoneH1x);
+
+        if (auto* slider = knobs[(size_t) zone.knobSlotIndex].slider.get())
+        {
+            const auto proportion = (float) slider->valueToProportionOfLength (slider->getValue());
+
+            // centreInMaster passed to drawWedge() must be in the SAME
+            // (off-plate/master) pixel space the zone's own offset is -
+            // AdditiveGlow does the master->screen scaling internally from
+            // destRect vs. the zone's own construction-time footprint.
+            knobRingGlows[i].drawWedge (g, destRect, { zone.centreXMasterPx, zone.centreYMasterPx },
+                                        zone.startAngleDeg, zone.endAngleDeg, proportion);
+        }
+    }
+
+    // 4. Bezel glow (signature behaviour #2, ADDITIVE) - the one-shot
+    // startup power-up, driven by bezelGlowT (see updateBezelGlow()).
+    {
+        const auto destRect = toScreenRect (bezelGlowZone1x[0], bezelGlowZone1x[1], bezelGlowZone1x[2], bezelGlowZone1x[3]);
+        bezelGlow.drawRing (g, destRect, bezelGlowT);
+    }
+
+    // 5. Freeze pressed-state: a minimal vector darken overlay - see
+    // PluginEditor.h's top-of-file docs for why (no pressed-state crop
+    // asset exists for this design revision).
+    if (freezeButton != nullptr && freezeButton->getToggleState())
+    {
+        const auto diameter = s ((float) buttonLeft1x.diameter1x);
+        const auto centre = juce::Point<float> (plateOrigin.x + s ((float) buttonLeft1x.cx1x),
+                                                 plateOrigin.y + s ((float) buttonLeft1x.cy1x));
+        g.setColour (juce::Colours::black.withAlpha (0.22f));
+        g.fillEllipse (juce::Rectangle<float> (diameter, diameter).withCentre (centre));
+    }
+
+    // (The needle is a separate HubNeedle child component, drawn after this
+    // method returns - see resized() for its bounds. Everything else -
+    // silver engravings, the moon-dial face itself, the crystal knobs' own
+    // baked facets, the 2 dark glass windows - stays BAKED in the master,
+    // no draw calls for any of it.)
 }
 
 void RequiemAudioProcessorEditor::resized()
 {
-    auto bounds = getLocalBounds().reduced (margin);
+    const auto scale = scaleSteps[(size_t) scaleStepIndex];
+    const auto s = [scale] (int v) { return (int) std::lround ((float) v * scale); };
 
-    presetBar.setBounds (bounds.removeFromTop (presetBarHeight));
-    bounds.removeFromTop (margin);
+    auto bounds = getLocalBounds();
+    auto topStrip = bounds.removeFromTop (s (topStripHeight1x));
 
-    auto irRow = bounds.removeFromBottom (irRowHeight);
-    loadIrButton.setBounds (irRow.removeFromLeft (100));
-    irRow.removeFromLeft (margin / 2);
-    clearIrButton.setBounds (irRow.removeFromLeft (80));
-    irRow.removeFromLeft (margin / 2);
-    irStatusLabel.setBounds (irRow);
+    scaleButton.setBounds (topStrip.removeFromRight (s (scaleButtonWidth1x)).reduced (0, s (2)));
+    presetBar.setBounds (topStrip.reduced (0, s (2)));
 
-    bounds.removeFromBottom (margin);
-
-    // Fifth row (v0.3.0): the wet chain.
-    auto fifthRow = bounds.removeFromBottom (fifthRowHeight);
-    fifthRow.removeFromTop (labelHeight);
-
-    for (auto* knob : { &lowCutKnob, &highCutKnob, &duckAmountKnob, &duckAttackKnob, &duckReleaseKnob })
+    // Everything below is expressed in plate-local coordinates (the base
+    // @1x table in PluginEditorLayout.h), then offset by the top strip +
+    // gap and scaled.
+    const auto toPlatePoint = [&] (juce::Point<int> plateLocal)
     {
-        knob->slider.setBounds (fifthRow.removeFromLeft (knobSize));
-        fifthRow.removeFromLeft (margin);
+        return juce::Point<int> (s (plateLocal.x),
+                                 s (topStripHeight1x + topStripGap1x) + s (plateLocal.y));
+    };
+
+    const auto meterSize = s (meterComponentSize1x);
+    const auto meterTopLeftScreen = toPlatePoint (meterTopLeft1x);
+    needle->setBounds (meterTopLeftScreen.x, meterTopLeftScreen.y, meterSize, meterSize);
+
+    for (const auto& slot : knobSlots1x)
+    {
+        const auto index = (size_t) (&slot - knobSlots1x.data());
+        const auto diameter = s (slot.diameter1x);
+
+        knobs[index].slider->setBounds (juce::Rectangle<int> (diameter, diameter)
+                                            .withCentre (toPlatePoint ({ slot.cx1x, knobRowY1x })));
     }
 
-    bounds.removeFromBottom (margin);
-
-    // Fourth row (v0.3.0): Engine + Tail Mod Mode + Mod Depth + Mod Rate + Bloom.
-    auto fourthRow = bounds.removeFromBottom (fourthRowHeight);
-    fourthRow.removeFromTop (labelHeight);
-
-    auto engineArea = fourthRow.removeFromLeft (engineComboWidth);
-    engineModeCombo.setBounds (engineArea.withSizeKeepingCentre (engineComboWidth, textBoxHeight));
-    fourthRow.removeFromLeft (margin);
-
-    auto tailModArea = fourthRow.removeFromLeft (tailModComboWidth);
-    tailModModeCombo.setBounds (tailModArea.withSizeKeepingCentre (tailModComboWidth, textBoxHeight));
-    fourthRow.removeFromLeft (margin);
-
-    for (auto* knob : { &tailModDepthKnob, &tailModRateKnob, &bloomAmountKnob })
     {
-        knob->slider.setBounds (fourthRow.removeFromLeft (knobSize));
-        fourthRow.removeFromLeft (margin);
+        const auto diameter = s (buttonLeft1x.diameter1x);
+        freezeButton->setBounds (juce::Rectangle<int> (diameter, diameter)
+                                     .withCentre (toPlatePoint ({ buttonLeft1x.cx1x, buttonLeft1x.cy1x })));
     }
 
-    bounds.removeFromBottom (margin);
+    // (buttonRight1x is intentionally left without a component - see
+    // PluginEditor.h's top-of-file docs; the master's own baked pose shows
+    // through unmodified.)
+}
 
-    // Third row (v0.2.0 additions): Size + Bass Decay.
-    auto thirdRow = bounds.removeFromBottom (thirdRowHeight);
-    thirdRow.removeFromTop (labelHeight); // room for the attached labels above these knobs
+void RequiemAudioProcessorEditor::updateBezelGlow() noexcept
+{
+    const auto now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    const auto elapsed = (float) (now - bezelGlowStartTimeSeconds);
 
-    sizeKnob.slider.setBounds (thirdRow.removeFromLeft (knobSize));
-    thirdRow.removeFromLeft (margin);
-    bassDecayKnob.slider.setBounds (thirdRow.removeFromLeft (knobSize));
+    if (elapsed >= bezelStartupDurationSeconds)
+    {
+        bezelGlowT = 1.0f;
+        return;
+    }
 
-    bounds.removeFromBottom (margin);
+    bezelGlowT = easeOutBackWithOvershoot (elapsed / bezelStartupDurationSeconds);
+}
 
-    // Second row: Space combo + Early/Late Balance + Modulation + Freeze.
-    auto secondRow = bounds.removeFromBottom (secondRowHeight);
-    secondRow.removeFromTop (labelHeight); // room for the Space label above the combo
+void RequiemAudioProcessorEditor::timerCallback()
+{
+    needle->setTargetDb (needleDbFromOutputLevelDb (audioProcessor.getCurrentOutputLevelDb()));
+    needle->tick (1.0f / 30.0f);
 
-    auto spaceArea = secondRow.removeFromLeft (spaceComboWidth);
-    spaceCombo.setBounds (spaceArea.withSizeKeepingCentre (spaceComboWidth, textBoxHeight));
-    secondRow.removeFromLeft (margin);
+    const auto wasSettled = juce::approximatelyEqual (bezelGlowT, 1.0f);
+    updateBezelGlow();
 
-    earlyLateBalanceKnob.slider.setBounds (secondRow.removeFromLeft (knobSize));
-    secondRow.removeFromLeft (margin);
-    modulationKnob.slider.setBounds (secondRow.removeFromLeft (knobSize));
-    secondRow.removeFromLeft (margin);
-    freezeButton.setBounds (secondRow.removeFromLeft (freezeButtonWidth).withSizeKeepingCentre (freezeButtonWidth, textBoxHeight));
+    if (! (wasSettled && juce::approximatelyEqual (bezelGlowT, 1.0f)))
+    {
+        const auto scale = scaleSteps[(size_t) scaleStepIndex];
+        const auto s = [scale] (int v) { return (int) std::lround ((float) v * scale); };
+        const auto yOffset = s (topStripHeight1x + topStripGap1x);
+        repaint (juce::Rectangle<int> (s (bezelGlowZone1x[0]), yOffset + s (bezelGlowZone1x[1]),
+                                       s (bezelGlowZone1x[2]), s (bezelGlowZone1x[3]))
+                     .expanded (s (4)));
+    }
+}
 
-    bounds.removeFromBottom (margin);
+void RequiemAudioProcessorEditor::setBezelGlowElapsedSecondsForPreview (double elapsedSeconds) noexcept
+{
+    bezelGlowStartTimeSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0 - elapsedSeconds;
+    updateBezelGlow();
+    repaint();
+}
 
-    bounds.removeFromTop (labelHeight); // room for the attached labels above each first-row knob
-
-    const auto slotWidth = bounds.getWidth() / numKnobs;
-
-    for (auto* knob : { &decayKnob, &preDelayKnob, &dampingKnob, &widthKnob, &mixKnob, &outputKnob })
-        knob->slider.setBounds (bounds.removeFromLeft (slotWidth).reduced (margin / 2, 0));
+void RequiemAudioProcessorEditor::setBezelGlowSettledForPreview() noexcept
+{
+    bezelGlowT = 1.0f;
+    repaint();
 }

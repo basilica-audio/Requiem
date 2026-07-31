@@ -83,6 +83,34 @@ juce_add_binary_data(RequiemBinaryData SOURCES
     presets/factory/dialogueDuckedScore.json
     presets/factory/infiniteFrozenNave.json
     resources/i18n/de.txt
+    # M3 photoreal GUI ("alchemie" faceplate design) - copied verbatim from
+    # brand/mocks/alchemie/ (repo-relative to the suite root, one level
+    # above this repo; see docs/gui-mapping.md for the full provenance and
+    # parameter-mapping table). One baked UNLIT master faceplate plus its
+    # small set of live-overlay source assets:
+    #   - master_alchemie.png: the SOLE faceplate baseline (copied from
+    #     master-03-glows-off.png) - aubergine panel, silver engravings,
+    #     moon-dial bezel (unlit), 5 crystal knobs (unlit ring channels),
+    #     2 buttons, 2 dark glass windows.
+    #   - needle_alchemie.png: the master-extracted, pivot-centred moon-dial
+    #     needle sprite (components/needle.png) - rotated live by
+    #     src/gui/HubNeedle.
+    #   - glow_knob_{1..4}.png / glow_bezel.png: the design's ADDITIVE light
+    #     diff sprites (components/glow-knob-N.png / glow-bezel.png) -
+    #     src/gui/AdditiveGlow composites these onto master_alchemie.png at
+    #     runtime (see that class's own compositing-model docs). Note the
+    #     LIT reference master (master-01-base.png) is intentionally NOT
+    #     embedded here - it is only needed by the round-trip test in
+    #     tests/gui/AdditiveGlowTests.cpp, which loads
+    #     tests/data/alchemie-master-01-base-lit-reference.png directly
+    #     from disk (see REQUIEM_TEST_DATA_DIR below), never via BinaryData.
+    resources/gui/master_alchemie.png
+    resources/gui/needle_alchemie.png
+    resources/gui/glow_knob_1.png
+    resources/gui/glow_knob_2.png
+    resources/gui/glow_knob_3.png
+    resources/gui/glow_knob_4.png
+    resources/gui/glow_bezel.png
 )
 
 # ==============================================================================
@@ -155,6 +183,14 @@ target_link_libraries(Tests PRIVATE SharedCode Catch2::Catch2)
 target_compile_definitions(Tests PRIVATE
     $<TARGET_PROPERTY:Requiem,COMPILE_DEFINITIONS>
     JUCE_MODAL_LOOPS_PERMITTED=1
+    # Absolute path to tests/data, so tests/gui/AdditiveGlowTests.cpp can
+    # load the LIT reference master (alchemie-master-01-base-lit-
+    # reference.png) as a one-time round-trip test fixture, off the runtime
+    # BinaryData path (see CMakeLists.txt's RequiemBinaryData docs above).
+    REQUIEM_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
+    # Absolute path to docs/, so tests/gui/EditorSnapshotTests.cpp can write
+    # the committed docs/gui-preview.png directly rather than a copy step.
+    REQUIEM_DOCS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/docs"
 )
 
 set_target_properties(Tests PROPERTIES XCODE_GENERATE_SCHEME ON)
