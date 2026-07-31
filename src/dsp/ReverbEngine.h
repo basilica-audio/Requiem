@@ -11,6 +11,8 @@
 #include "MorphingConvolution.h"
 #include "WetChain.h"
 
+#include <mutex>
+
 // The complete Requiem signal path, independent of juce::AudioProcessor so it
 // can be exercised directly by unit tests without instantiating a full plugin
 // (see tests/EngineTests.cpp). Owns all DSP state; every buffer/filter/delay
@@ -50,6 +52,39 @@
 // so a 20 Hz parameter poll can never make the editor stutter. The message
 // thread only posts parameter snapshots. Results reach the audio thread
 // through SpinLock-guarded slots that process() only ever *tries*.
+//
+// reconfigureMutex (added for #29, mirroring basilica-audio/nave's
+// CabConvolutionEngine::messageThreadMutex - see that repo's PR #28).
+// prepare() is called from RequiemAudioProcessor::prepareToPlay(), which -
+// like Nave's equivalent - the host may call from any thread it chooses;
+// the VST3/AU contract guarantees only that it is not the audio thread, NOT
+// that it is JUCE's own MessageManager thread. prepare() mutates
+// sampleRate/numChannels/maximumBlockSize and fdnTail's delay-line buffers
+// directly, and calls renderOnce() synchronously - all state the background
+// "Requiem IR Render" thread's own renderOnce() call (see runRenderLoop())
+// also reads/writes, with no synchronisation between the two pre-#29. Two
+// non-audio threads touching the same mutable engine state with no lock is
+// exactly Nave's #27/#28 bug shape, just one layer up from JUCE's
+// Convolution itself. loadUserImpulseResponse()/clearUserImpulseResponse()
+// have the identical hazard on usingUserImpulseResponse/
+// userImpulseResponseFile: both are called from RequiemAudioProcessor::
+// setStateInformation() (host thread, same "not guaranteed message thread"
+// contract as prepareToPlay()) AND from GUI FileChooser callbacks (the real
+// message thread) - see PluginProcessor.cpp. reconfigureMutex (a
+// std::recursive_mutex - prepare() calls buildRequest()/renderOnce() while
+// already holding it) is taken by prepare()'s entire body, by
+// loadUserImpulseResponse()/clearUserImpulseResponse(), by buildRequest()
+// (so every reader of usingUserImpulseResponse/userImpulseResponseFile is
+// covered, including from regenerateImpulseResponseIfNeeded() on the real
+// message thread), and around the renderOnce() call inside
+// runRenderLoop() - serialising every one of those call sites against each
+// other regardless of which OS threads they land on. Never taken by
+// process()/applyPendingImpulseResponseIfAny()/
+// applyPendingHybridSetupIfAny() (the audio-thread path), which keep their
+// existing lock-free/SpinLock::ScopedTryLockType design - no lock or
+// allocation is added to the audio thread. See
+// tests/CrossThreadReprepareTests.cpp for the regression coverage and its
+// audit-findings header comment for the full trace.
 class ReverbEngine
 {
 public:
@@ -321,6 +356,13 @@ private:
     RenderRequest requestedRender;
     RenderRequest lastRenderedRequest;
     bool hasRenderedOnce = false;
+
+    // See the class-level THREADING comment above. Serialises prepare(),
+    // loadUserImpulseResponse()/clearUserImpulseResponse(), buildRequest(),
+    // and the renderOnce() call inside runRenderLoop() against each other.
+    // Recursive: prepare() calls buildRequest()/renderOnce() while already
+    // holding it. Never taken on the audio thread.
+    mutable std::recursive_mutex reconfigureMutex;
 
     juce::WaitableEvent renderWakeUp;
     juce::WaitableEvent renderCompleted { true };
