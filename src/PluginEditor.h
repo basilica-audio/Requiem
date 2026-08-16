@@ -1,102 +1,128 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <juce_gui_basics/juce_gui_basics.h>
 
+#include <array>
+#include <memory>
+
+#include "PluginEditorLayout.h"
+#include "gui/AdditiveGlow.h"
+#include "gui/HubNeedle.h"
+#include "gui/InvisibleKnob.h"
 #include "presets/PresetBar.h"
 
 class RequiemAudioProcessor;
 
-// A simple, functional v0.1 editor: one rotary slider per parameter, bound
-// to the APVTS via SliderAttachment, plus a "Load IR..."/"Clear IR" pair of
-// buttons for the optional user impulse-response override. A custom
-// vector-drawn GUI is a later milestone; this is deliberately plain but
-// fully wired and usable.
-class RequiemAudioProcessorEditor final : public juce::AudioProcessorEditor
+// M3 photoreal GUI (the "alchemie" faceplate design) - reuses
+// basilica-audio/aureate's M3 pilot architecture (a single baked master
+// image + small live overlays, the preset-bar/scale-step editor frame, and
+// HubNeedle) but adapts the interaction/lighting model where this design
+// genuinely differs from tubecomp - see docs/gui-mapping.md for the full
+// component-reuse-vs-adaptation table:
+//   1. baseline master (paint()) - the aubergine panel, silver engravings,
+//      moon-dial bezel (unlit), 5 black crystal knobs (unlit ring
+//      channels), 2 buttons, 2 dark glass windows - all baked, single image.
+//   2. 5x InvisibleKnob (own child components) - plain hit-areas; the
+//      crystal knobs themselves NEVER repaint (no pointer on a faceted
+//      crystal - see InvisibleKnob.h's docs).
+//   3. 4x AdditiveGlow::drawWedge() (paint()) - the four outer knobs' ring
+//      halos, angularly clipped to each knob's own live normalised value
+//      (signature behaviour #1).
+//   4. 1x AdditiveGlow::drawRing() (paint()) - the bezel's one-shot startup
+//      power-up, eased with a brief overshoot (signature behaviour #2).
+//   5. HubNeedle (own child component) - the moon-dial needle only; the
+//      dial face itself stays fully baked.
+//   6. Freeze button pressed-state: a minimal vector darken overlay
+//      (paint()) - see docs/gui-mapping.md for why (no pressed-state crop
+//      asset exists for this design revision, unlike tubecomp's
+//      toggle-N-down.png family).
+//   7. IR override button (buttonRight1x): opens a juce::PopupMenu
+//      ("Load IR..." / "Use procedural IR") wired to the existing,
+//      unmodified user-IR backend (RequiemAudioProcessor::
+//      loadUserImpulseResponseFile()/clearUserImpulseResponseFile()/
+//      isUsingUserImpulseResponse()). Reuses the Freeze button's own vector
+//      overlay technique for both its transient pressed-state darken and,
+//      while a user IR is active, a persistent subtle brightness LIFT
+//      (paint()) - see docs/gui-mapping.md's button-mapping table.
+class RequiemAudioProcessorEditor final : public juce::AudioProcessorEditor,
+                                          private juce::Timer
 {
 public:
     explicit RequiemAudioProcessorEditor (RequiemAudioProcessor& processorToEdit);
     ~RequiemAudioProcessorEditor() override;
 
+    void paint (juce::Graphics& g) override;
     void resized() override;
 
+    // Test/preview-only: headless test binaries have no running message
+    // loop to pump real timer ticks through (see
+    // tests/gui/EditorSnapshotTests.cpp's own docs). Normal operation never
+    // calls these.
+    void setBezelGlowElapsedSecondsForPreview (double elapsedSeconds) noexcept;
+    void setBezelGlowSettledForPreview() noexcept;
+
 private:
+    void timerCallback() override;
+    void updateBezelGlow() noexcept;
+
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    // One knob + label per float/choice parameter, in signal-flow order.
     struct Knob
     {
-        juce::Slider slider;
-        juce::Label label;
+        std::unique_ptr<basilica::gui::InvisibleKnob> slider;
         std::unique_ptr<SliderAttachment> attachment;
     };
 
     void configureKnob (Knob& knob, const juce::String& parameterId, const juce::String& labelText);
-    void updateIrStatusLabel();
+    void applyScaleStep (int newStepIndex);
+    void cycleScale();
+    void showIrMenu();
+    void repaintButtonZone (const rqm::layout::ButtonSlot1x& slot) noexcept;
 
     RequiemAudioProcessor& audioProcessor;
 
-    // M2 preset system (.scaffold/specs/preset-system-m2.md). Declared
-    // first among the visible components so its initialiser (which also
-    // installs the i18n frame - see PluginEditor.cpp's
-    // initLocalisationThenGetPresetManager()) runs before any other
-    // component that calls TRANS() on its own labels.
+    juce::Image masterImage;
+
     basilica::presets::PresetBar presetBar;
+    juce::TextButton scaleButton;
+    int scaleStepIndex = 0; // 0 = 100%, 1 = 150%, 2 = 200%
 
-    Knob decayKnob;
-    Knob preDelayKnob;
-    Knob dampingKnob;
-    Knob widthKnob;
-    Knob mixKnob;
-    Knob outputKnob;
+    std::unique_ptr<basilica::gui::HubNeedle> needle;
 
-    // Space/Early-Late-Balance/Modulation/Freeze: a second row, added for
-    // the M1 DSP-completion parameters. Space is a choice parameter (a
-    // ComboBox suits it far better than a rotary slider); Freeze is a
-    // boolean toggle.
-    juce::Label spaceLabel;
-    juce::ComboBox spaceCombo;
-    std::unique_ptr<ComboBoxAttachment> spaceAttachment;
+    static constexpr int numKnobs = 5;
+    std::array<Knob, numKnobs> knobs;
 
-    Knob earlyLateBalanceKnob;
-    Knob modulationKnob;
+    // 4 outer knobs' ring glows, parallel to rqm::layout::knobRingZones
+    // (NOT to knobs[] directly - the centre knob at knobSlots1x[2] has no
+    // ring entry, see centreKnobSlotIndex).
+    std::array<basilica::gui::AdditiveGlow, 4> knobRingGlows;
 
-    // v0.2.0 additions (see docs/design-brief.md): a third row.
-    Knob sizeKnob;
-    Knob bassDecayKnob;
+    basilica::gui::AdditiveGlow bezelGlow;
+    double bezelGlowStartTimeSeconds = 0.0;
+    float bezelGlowT = 0.0f;
 
-    // v0.3.0 "Living Tail" additions: two further rows, wired into the same
-    // generic layout and LookAndFeel as everything above. The photoreal M3
-    // editor lives on its own branches and is explicitly out of scope here -
-    // this is parameter wiring, not a GUI design.
-    juce::Label engineModeLabel;
-    juce::ComboBox engineModeCombo;
-    std::unique_ptr<ComboBoxAttachment> engineModeAttachment;
-
-    juce::Label tailModModeLabel;
-    juce::ComboBox tailModModeCombo;
-    std::unique_ptr<ComboBoxAttachment> tailModModeAttachment;
-
-    Knob tailModDepthKnob;
-    Knob tailModRateKnob;
-    Knob bloomAmountKnob;
-
-    Knob lowCutKnob;
-    Knob highCutKnob;
-    Knob duckAmountKnob;
-    Knob duckAttackKnob;
-    Knob duckReleaseKnob;
-
-    juce::ToggleButton freezeButton { "Freeze" };
+    // Freeze - the only true boolean parameter in Requiem's APVTS (see
+    // docs/gui-mapping.md's mapping table). Bound to buttonLeft1x.
+    std::unique_ptr<juce::ToggleButton> freezeButton;
     std::unique_ptr<ButtonAttachment> freezeAttachment;
 
-    juce::TextButton loadIrButton { "Load IR..." };
-    juce::TextButton clearIrButton { "Clear IR" };
-    juce::Label irStatusLabel;
+    // IR override entry point (buttonRight1x) - restores the pre-M3 editor's
+    // "Load IR..."/"Clear IR" feature through a juce::PopupMenu ("Load IR..."
+    // / "Use procedural IR") rather than dedicated buttons/label, since only
+    // one physical button remains. No APVTS attachment: the user-IR override
+    // is processor-owned file state, not a parameter (see PluginProcessor.h's
+    // loadUserImpulseResponseFile()/clearUserImpulseResponseFile()/
+    // isUsingUserImpulseResponse()).
+    std::unique_ptr<juce::TextButton> irButton;
+    std::unique_ptr<juce::FileChooser> irFileChooser;
 
-    std::unique_ptr<juce::FileChooser> fileChooser;
+    // Cache of isUsingUserImpulseResponse(), polled once per timer tick
+    // (timerCallback()) so the persistent "lit" marker overlay repaints
+    // promptly if the active/procedural state changes for a reason other
+    // than this button's own menu (e.g. a host reloading session state with
+    // a previously-saved user IR while the editor is already open).
+    bool irButtonLitCache = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RequiemAudioProcessorEditor)
 };

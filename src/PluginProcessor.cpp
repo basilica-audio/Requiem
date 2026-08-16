@@ -218,6 +218,8 @@ void RequiemAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
     // ReverbEngine::getLatencySamples().
     setLatencySamples (engine.getLatencySamples());
 
+    currentOutputLevelDb.store (-100.0f, std::memory_order_relaxed);
+
     startTimerHz (impulseResponseTimerHz);
 }
 
@@ -267,6 +269,14 @@ void RequiemAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
     juce::dsp::AudioBlock<float> block (buffer);
     engine.process (block);
+
+    // M3 GUI metering: instantaneous post-engine output magnitude (plain
+    // atomic store, no allocation) - see getCurrentOutputLevelDb()'s docs.
+    const auto numSamples = buffer.getNumSamples();
+
+    if (numSamples > 0)
+        currentOutputLevelDb.store (juce::Decibels::gainToDecibels (buffer.getMagnitude (0, numSamples), -100.0f),
+                                    std::memory_order_relaxed);
 }
 
 //==============================================================================
