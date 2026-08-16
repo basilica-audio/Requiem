@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-31
+
+Crash-fix patch release.
+
+### Fixed
+
+- **Unsynchronized reconfiguration racing the background IR-render thread** (PR #29). `ReverbEngine::prepare()` — invoked from the host's `prepareToPlay()` thread — mutated sample-rate/channel state and the FDN tail's delay lines with no synchronization against the background "Requiem IR Render" thread's concurrent render pass; a second instance of the same shape existed on the user-IR load/clear path (message thread vs `setStateInformation()` host thread). Reproduced deterministically (SIGSEGV, 15/15 runs) by a new cross-thread stress test; fixed by serializing all reconfiguration entry points behind a mutex the audio thread never takes. Red-verified: crash reproduces with the fix stashed, 35 clean runs with it restored. New regression guard: `tests/CrossThreadReprepareTests.cpp`.
+
 ## [0.3.0] - 2026-07-27
 
 The "Living Tail" release. Requiem gains a second way of producing a reverb tail - a feedback delay network whose decay is fitted automatically to whatever impulse response is loaded - and the workflow controls a cinematic reverb needs in a mix.
