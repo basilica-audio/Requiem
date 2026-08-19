@@ -8,6 +8,8 @@
 #include "PluginEditorLayout.h"
 #include "gui/AdditiveGlow.h"
 #include "gui/HubNeedle.h"
+#include "gui/FocusRingButton.h"
+#include "gui/FocusRingToggle.h"
 #include "gui/InvisibleKnob.h"
 #include "presets/PresetBar.h"
 
@@ -104,7 +106,10 @@ private:
 
     // Freeze - the only true boolean parameter in Requiem's APVTS (see
     // docs/gui-mapping.md's mapping table). Bound to buttonLeft1x.
-    std::unique_ptr<juce::ToggleButton> freezeButton;
+    // FocusRingToggle/FocusRingButton rather than the plain JUCE types
+    // (issue #5, WCAG 2.4.7): both controls are intentionally invisible,
+    // so keyboard focus needs its own visible ring - see the two headers.
+    std::unique_ptr<basilica::gui::FocusRingToggle> freezeButton;
     std::unique_ptr<ButtonAttachment> freezeAttachment;
 
     // IR override entry point (buttonRight1x) - restores the pre-M3 editor's
@@ -114,7 +119,7 @@ private:
     // is processor-owned file state, not a parameter (see PluginProcessor.h's
     // loadUserImpulseResponseFile()/clearUserImpulseResponseFile()/
     // isUsingUserImpulseResponse()).
-    std::unique_ptr<juce::TextButton> irButton;
+    std::unique_ptr<basilica::gui::FocusRingButton> irButton;
     std::unique_ptr<juce::FileChooser> irFileChooser;
 
     // Cache of isUsingUserImpulseResponse(), polled once per timer tick

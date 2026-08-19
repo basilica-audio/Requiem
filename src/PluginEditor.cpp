@@ -166,7 +166,7 @@ RequiemAudioProcessorEditor::RequiemAudioProcessorEditor (RequiemAudioProcessor&
         masterImage, bezelGlowImage, { bezelGlowZoneMasterPx[0], bezelGlowZoneMasterPx[1] }, 1.0f, bezelOvershootPeakT);
     bezelGlowStartTimeSeconds = juce::Time::getMillisecondCounterHiRes() / 1000.0;
 
-    freezeButton = std::make_unique<juce::ToggleButton> (juce::String());
+    freezeButton = std::make_unique<basilica::gui::FocusRingToggle> (juce::String());
     freezeButton->setColour (juce::ToggleButton::tickColourId, juce::Colours::transparentBlack);
     freezeButton->setColour (juce::ToggleButton::tickDisabledColourId, juce::Colours::transparentBlack);
     freezeButton->setColour (juce::ToggleButton::textColourId, juce::Colours::transparentBlack);
@@ -183,7 +183,7 @@ RequiemAudioProcessorEditor::RequiemAudioProcessorEditor (RequiemAudioProcessor&
     // (transparent, no baked pressed-state crop exists for this design) so
     // it stays keyboard-operable (Enter/Space triggers onClick) via JUCE's
     // ordinary Button focus handling - no custom key handling needed.
-    irButton = std::make_unique<juce::TextButton> (juce::String());
+    irButton = std::make_unique<basilica::gui::FocusRingButton> (juce::String());
     irButton->setColour (juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
     irButton->setColour (juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
     irButton->setColour (juce::TextButton::textColourOffId, juce::Colours::transparentBlack);
