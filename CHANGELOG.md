@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-19
+
+The M3 GUI release: the M1/M2 functional slider-grid editor is replaced by the photoreal
+"alchemie" faceplate, built on aureate's M3 pilot architecture (single baked master plus
+live overlays).
+
+### Added
+
+- **M3 photoreal GUI (alchemie design)** (PR #28). Five faceted knobs - Decay,
+  Pre-Delay, Mix (the larger central octagon), Damping, Size - plus a Freeze button and
+  an IR-override button opening an async `juce::PopupMenu` ("Load IR..." / "Use
+  procedural IR") wired to the existing user-IR backend, with a transient pressed-state
+  darken and a persistent brightness lift while a user IR is active. Mapping table and
+  the reuse-vs-adaptation rationale in `docs/gui-mapping.md`.
+- Two new components where this design genuinely diverges from the aureate pilot:
+  `AdditiveGlow` (this design's additive light model) and `InvisibleKnob` (non-rotating
+  faceted knobs).
+- Output-level needle driven by a new real-time-safe `getCurrentOutputLevelDb()` atomic,
+  mapped -60..0 dBFS onto the dial's measured -130 to +130 degree sweep (no printed
+  numerals on this dial; measured via a polar-protractor overlay on the master render).
+- One-shot 1.2 s startup bezel glow (ease-out-back, analytic overshoot peak ~115%,
+  settles to a stable 1.0 - verified in tests).
+
 ## [0.3.1] - 2026-07-31
 
 Crash-fix patch release.
