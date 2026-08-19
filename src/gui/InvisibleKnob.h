@@ -1,5 +1,7 @@
 #pragma once
 
+#include "KeyboardSteps.h"
+
 #include <juce_gui_basics/juce_gui_basics.h>
 
 // Requiem's own "alchemie" faceplate design knob interaction - NEW for this
@@ -32,6 +34,23 @@ namespace basilica::gui
             setMouseDragSensitivity (normalDragSensitivity);
             setScrollWheelEnabled (true);
             setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
+
+            // Keyboard navigation (issue #5, WCAG 2.1.1): juce::Slider::init()
+            // ships with setWantsKeyboardFocus(false) in JUCE 8.0.14
+            // (juce_Slider.cpp:1461) - without opting back in, Tab never
+            // reaches the knob, the focus ring in paint() can never show,
+            // and keyPressed() below never fires.
+            setWantsKeyboardFocus (true);
+        }
+
+        // WCAG 2.1.1 Keyboard (issue #5): WAI-ARIA-style stepping (Arrow
+        // 1%, Shift+Arrow fine, PageUp/Down 10%, Home/End extremes) via
+        // KeyboardSteps.h - juce::Slider's own keyPressed (JUCE 8.0.14,
+        // juce_Slider.cpp:1029) steps by the raw parameter interval
+        // (impractically fine here) and swallows Shift entirely.
+        bool keyPressed (const juce::KeyPress& key) override
+        {
+            return handleSliderKeyPress (*this, key) || juce::Slider::keyPressed (key);
         }
 
         // Deliberately empty: the crystal knob's own baked art (drawn once,

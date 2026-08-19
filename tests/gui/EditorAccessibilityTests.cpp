@@ -2,6 +2,7 @@
 #include "PluginProcessor.h"
 #include "gui/HubNeedle.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 // a11y coverage for every wired M3 photoreal-GUI control. Deliberately calls
@@ -155,4 +156,90 @@ TEST_CASE ("Scale button's accessible title reflects the current scale percentag
     CHECK (scaleButton->getButtonText() == "150%");
     CHECK (scaleButton->getTitle().contains ("150%"));
     CHECK_FALSE (scaleButton->getTitle().contains ("100%"));
+}
+
+// Issue #5 (keyboard navigation): juce::Slider ships with
+// setWantsKeyboardFocus(false) in JUCE 8.0.14 (juce_Slider.cpp:1461,
+// Slider::init), so InvisibleKnob was silently unreachable by Tab and its
+// keyPressed()/focus ring never fired - and even when focused, the base
+// keyPressed (juce_Slider.cpp:1029) steps by the raw parameter interval
+// (0.1% on Mix's 100% range) and ignores Shift entirely. These tests pin
+// the fixed contract (setWantsKeyboardFocus(true) + KeyboardSteps.h).
+
+TEST_CASE ("Every interactive control is keyboard-focusable", "[gui][a11y]")
+{
+    RequiemAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+    RequiemAudioProcessorEditor editor (processor);
+
+    int knobsSeen = 0, buttonsSeen = 0;
+
+    for (int i = 0; i < editor.getNumChildComponents(); ++i)
+    {
+        auto* child = editor.getChildComponent (i);
+
+        if (auto* slider = dynamic_cast<juce::Slider*> (child))
+        {
+            ++knobsSeen;
+            INFO ("knob \"" << slider->getTitle().toStdString() << "\"");
+            CHECK (slider->getWantsKeyboardFocus());
+        }
+        else if (auto* button = dynamic_cast<juce::Button*> (child))
+        {
+            ++buttonsSeen;
+            INFO ("button \"" << button->getTitle().toStdString() << "\"");
+            CHECK (button->getWantsKeyboardFocus());
+        }
+    }
+
+    // All 5 crystal knobs and 3 buttons (Freeze, IR loader, scale) must be
+    // present AND focusable - a zero-match loop must not pass vacuously.
+    CHECK (knobsSeen == 5);
+    CHECK (buttonsSeen == 3);
+}
+
+TEST_CASE ("Arrow keys step knobs by a practical amount, Shift+Arrow steps finer", "[gui][a11y]")
+{
+    RequiemAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 512);
+    RequiemAudioProcessorEditor editor (processor);
+
+    // Mix: linear 0..100 %, 0.1 interval (ParameterLayout.cpp) - the
+    // base-class step would be 0.1 over a 100-unit range (1000 presses).
+    auto* knob = findChildByTitle<juce::Slider> (editor, "Mix");
+    REQUIRE (knob != nullptr);
+
+    knob->setValue (50.0, juce::sendNotificationSync);
+
+    // Called through Component& for the same [class.access.virt] reason
+    // documented on createHandlerForTest().
+    juce::Component& knobAsComponent = *knob;
+
+    // Plain Right = 1% of the 100-unit range = 1.0.
+    REQUIRE (knobAsComponent.keyPressed (juce::KeyPress (juce::KeyPress::rightKey)));
+    CHECK (knob->getValue() == Catch::Approx (51.0).margin (1.0e-4));
+
+    // Shift+Right = 0.1% = 0.1 (the keyboard analog of Shift-drag).
+    REQUIRE (knobAsComponent.keyPressed (juce::KeyPress (juce::KeyPress::rightKey,
+                                                          juce::ModifierKeys::shiftModifier, 0)));
+    CHECK (knob->getValue() == Catch::Approx (51.1).margin (1.0e-4));
+
+    // Plain Left steps back down symmetrically.
+    REQUIRE (knobAsComponent.keyPressed (juce::KeyPress (juce::KeyPress::leftKey)));
+    CHECK (knob->getValue() == Catch::Approx (50.1).margin (1.0e-4));
+
+    // PageDown = 10% = 10.0.
+    REQUIRE (knobAsComponent.keyPressed (juce::KeyPress (juce::KeyPress::pageDownKey)));
+    CHECK (knob->getValue() == Catch::Approx (40.1).margin (1.0e-4));
+
+    // Home/End jump to the range extremes (WAI-ARIA slider pattern).
+    REQUIRE (knobAsComponent.keyPressed (juce::KeyPress (juce::KeyPress::homeKey)));
+    CHECK (knob->getValue() == Catch::Approx (0.0).margin (1.0e-4));
+    REQUIRE (knobAsComponent.keyPressed (juce::KeyPress (juce::KeyPress::endKey)));
+    CHECK (knob->getValue() == Catch::Approx (100.0).margin (1.0e-4));
+
+    // Ctrl/Cmd-modified presses are host shortcuts - never consumed.
+    CHECK_FALSE (knobAsComponent.keyPressed (juce::KeyPress (juce::KeyPress::rightKey,
+                                                              juce::ModifierKeys::ctrlModifier, 0)));
+    CHECK (knob->getValue() == Catch::Approx (100.0).margin (1.0e-4));
 }
