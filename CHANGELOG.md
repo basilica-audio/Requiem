@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-20
+
+An accessibility release. The alchemie faceplate's five crystal knobs and its two
+invisible buttons are now reachable and operable from the keyboard alone, with a focus
+indicator that is actually visible on a deliberately transparent control. Nothing in the
+audio path changed - a v0.4.0 session loads and renders bit-identically, and latency
+stays zero.
+
+### Added
+
+- **WAI-ARIA-style keyboard stepping on the five knobs** (`src/gui/KeyboardSteps.h`,
+  PR #32). Arrow moves 1% of the control's range, Shift+Arrow 0.1% - the keyboard analog
+  of the Shift-drag fine mode the knobs already had on the mouse - PageUp/PageDown 10%,
+  and Home/End the range extremes. Steps are taken in the slider's proportional domain,
+  so a skewed range sweeps as evenly under the arrow keys as under a drag, and the result
+  is still snapped to the parameter's own interval grid, so quantisation is never
+  violated. A focus flag alone would not have been enough: JUCE's stock handler steps by
+  the raw parameter interval and refuses outright while any modifier key is held, so
+  Shift+Arrow did nothing at all. Ctrl/Cmd-modified arrows are deliberately left to the
+  host as shortcuts.
+- **`src/gui/FocusRingToggle.h` and `src/gui/FocusRingButton.h`**: focus-visible
+  subclasses for the Freeze toggle and the IR-override button. Both are deliberately
+  invisible controls - every colour ID is `transparentBlack`, the visible art being the
+  baked master underneath - and neither of `LookAndFeel_V4`'s focus cues survives that:
+  it draws no focus indication at all for toggles, and indicates focus on a text button
+  purely by boosting the background colour's saturation, which is a no-op on a fully
+  transparent background. Both now draw the same minimal, self-contained ring
+  `InvisibleKnob::paint()` uses. Enter/Space activation on both was already correct and
+  is unchanged.
+- New `tests/gui/EditorAccessibilityTests.cpp` coverage pinning the contract: focus
+  reachability of all five knobs and all three buttons (asserted by count, so a
+  zero-match loop cannot pass vacuously), coarse/fine/page/Home/End stepping on Mix, and
+  Ctrl/Cmd passthrough.
+
+### Fixed
+
+- **The five crystal knobs could not be reached by keyboard at all** (PR #32).
+  `juce::Slider::init()` ships `setWantsKeyboardFocus(false)` (JUCE 8.0.14,
+  `juce_Slider.cpp:1461`) and `InvisibleKnob` never opted back in, so Tab skipped past
+  Decay, Pre-Delay, Mix, Damping and Size alike, the WCAG 2.4.7 focus ring already drawn
+  in `paint()` could never appear, and no key press ever reached a knob. They now take
+  focus in reading order and show their ring while focused.
+
+### Known limitations
+
+- This release covers **keyboard** operation (WCAG 2.1.1, 2.4.7). Assistive-technology
+  increment and decrement actions - VoiceOver's rotor, NVDA's value adjustment - never
+  reach `keyPressed()`; they go through JUCE's accessibility value interface, which still
+  reports the raw parameter interval as its step size, so a screen-reader user still
+  adjusts a knob one raw interval at a time. Closing that gap means giving each control a
+  custom `AccessibilityHandler` carrying its own value interface, which is the next step
+  rather than part of this release.
+
 ## [0.4.0] - 2026-08-19
 
 The M3 GUI release: the M1/M2 functional slider-grid editor is replaced by the photoreal
