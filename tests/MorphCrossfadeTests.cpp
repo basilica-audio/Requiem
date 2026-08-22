@@ -5,6 +5,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <vector>
@@ -221,62 +222,193 @@ TEST_CASE ("6.3 A Damping-only change is still detected, via the length sentinel
 }
 
 //==============================================================================
-// 6.3(b) - the click detector. A kernel swap under a sustained sine must not
-// produce a sample-to-sample step materially larger than the signal's own.
+// 6.3(b) - the click detector. A kernel swap under a sustained tone must not
+// produce a discontinuity a listener would hear as a transient.
+//
+// WHAT THE ASSERTION IS PROTECTING. Feed a sustained 440 Hz sine; both engines
+// are LTI, so once the old kernel's tail has fully built up the output is a
+// *pure* 440 Hz sine. A band-limited sine of peak A cannot slew faster than
+//
+//     maxStep = 2 * sin(pi * f / fs) * A          per sample
+//
+// and the settled output sits exactly on that bound - measured at 1.000006x it,
+// bit-identically on every run, because it is an algebraic identity rather than
+// a statistic. That is the reference the swap is judged against: how many times
+// faster than a tone at its own level did the output slew while the kernel was
+// exchanged. Removing the equal-power ramp makes the cold idle engine's onset
+// transient appear at full level instead of being windowed in, which is a
+// ~9x level jump - and that is exactly what this test refuses.
+//
+// WHY THIS IS NOT A RACE. The previous version of this test compared a max step
+// gathered over a fixed 400-block window against a "steady-state" baseline
+// gathered over the preceding 150 blocks. Neither window was steady: at 150
+// blocks (0.4 s) the 2 s tail is still building, and the 400-block window
+// caught a scheduler-dependent amount of the 6 s tail's build-up. It therefore
+// compared a still-building tail against a still-building tail, and the 3x
+// tolerance it needed had 0.55% of headroom - it turned main red at aa868b5 on
+// a run with no code change. Two things fix that, and neither is a nudged
+// constant:
+//
+//   1. The reference is the *settled* tone immediately before the swap, whose
+//      slew is known in closed form, instead of a co-measured noisy baseline.
+//   2. The measurement window is anchored to the swap *in audio time*. Warm-up
+//      leaves the output 100% the live engine, so the block on which
+//      isWarmingUp() goes false is the last one rendered from the old kernel
+//      alone, and the swap therefore begins at exactly that sample index -
+//      however many blocks the background loader happened to need. Scheduler
+//      jitter changes how long warm-up takes; it no longer moves the window
+//      relative to the audio event.
+//
+// Only the warm-up loop sleeps, and only because juce::dsp::Convolution
+// (JUCE 8.0.14) installs a posted kernel on its own background thread and
+// offers no completion callback. Everything before and after it runs flat out.
+//
+// MEASURED HEADROOM, sweeping the swap phase across 33 distinct block anchors
+// (warm-up 2..16 blocks, machine idle and loaded to 2x core count):
+//
+//     equal-power ramp intact : 1.71 .. 2.53   (bound 5.0, i.e. 2.0x headroom)
+//     ramp replaced by a hard
+//     switch (mechanism gone) : 9.21 .. 167.6  (worst case still 1.8x over)
 TEST_CASE ("6.3 Swapping kernels under a sustained sine produces no click", "[morph][crossfade]")
 {
+    constexpr double toneHz = 440.0;
+    constexpr float toneAmplitude = 0.5f;
+
+    // Times the band-limited peak, this is the largest per-sample step a sine
+    // at toneHz can take. Zoelzer, DAFX 2nd ed., sec. 1.2: differentiating
+    // A*sin(wn) gives |y[n]-y[n-1]| = 2A*sin(w/2)*|cos(w(n-1/2))|.
+    const auto slewPerUnitPeak = 2.0f * std::sin (juce::MathConstants<float>::pi
+                                                    * static_cast<float> (toneHz / testSampleRate));
+
+    // How many times a settled tone's own slew the output may reach while the
+    // kernel is exchanged. See the measured spread above.
+    constexpr float clickBudget = 5.0f;
+
     MorphingConvolution morph;
     morph.loadKernelSynchronously (makeKernel (2.0f, 8000.0f, 0), testSampleRate, 2);
     morph.prepare (specFor (testSampleRate));
 
     juce::AudioBuffer<float> buffer (2, testBlockSize);
     std::vector<float> rendered;
-    rendered.reserve (200000);
+    rendered.reserve (400000);
 
     juce::int64 sampleIndex = 0;
 
-    const auto pushBlocks = [&] (int numBlocks)
+    const auto pushBlock = [&] (bool sleep)
     {
-        for (int block = 0; block < numBlocks; ++block)
-        {
-            TestHelpers::fillWithSine (buffer, testSampleRate, 440.0, 0.5f, sampleIndex);
-            sampleIndex += testBlockSize;
+        TestHelpers::fillWithSine (buffer, testSampleRate, toneHz, toneAmplitude, sampleIndex);
+        sampleIndex += testBlockSize;
 
-            auto audioBlock = juce::dsp::AudioBlock<float> (buffer);
-            morph.process (audioBlock);
+        auto audioBlock = juce::dsp::AudioBlock<float> (buffer);
+        morph.process (audioBlock);
 
-            for (int i = 0; i < testBlockSize; ++i)
-                rendered.push_back (buffer.getSample (0, i));
+        for (int i = 0; i < testBlockSize; ++i)
+            rendered.push_back (buffer.getSample (0, i));
 
+        if (sleep)
             juce::Thread::sleep (1);
-        }
     };
 
-    // Steady state first, to establish the baseline step size.
-    pushBlocks (150);
-    const auto steadyStateSamples = rendered.size();
+    const auto maxStepOver = [&] (size_t from, size_t to)
+    {
+        auto maxStep = 0.0f;
 
-    auto steadyStateMaxStep = 0.0f;
+        for (auto i = juce::jmax (size_t (1), from); i < juce::jmin (to, rendered.size()); ++i)
+            maxStep = juce::jmax (maxStep, std::abs (rendered[i] - rendered[i - 1]));
 
-    for (size_t i = steadyStateSamples / 2; i < steadyStateSamples; ++i)
-        steadyStateMaxStep = juce::jmax (steadyStateMaxStep, std::abs (rendered[i] - rendered[i - 1]));
+        return maxStep;
+    };
 
-    REQUIRE (steadyStateMaxStep > 0.0f);
+    const auto peakOver = [&] (size_t from, size_t to)
+    {
+        auto peak = 0.0f;
 
-    // Decay 2 s -> 6 s, the brief's swap.
+        for (auto i = from; i < juce::jmin (to, rendered.size()); ++i)
+            peak = juce::jmax (peak, std::abs (rendered[i]));
+
+        return peak;
+    };
+
+    //==========================================================================
+    // The initial kernel is installed by the same background thread, so wait
+    // for it on the handshake rather than on a timer. After this point nothing
+    // in the test is waiting on another thread until the swap is posted.
+    auto installBlocks = 0;
+
+    while (morph.getLiveIrSize() <= 0 && installBlocks < 4000)
+    {
+        pushBlock (true);
+        ++installBlocks;
+    }
+
+    REQUIRE (morph.getLiveIrSize() > 0);
+
+    // Settle the 2 s tail completely - 3.2 s, flat out.
+    for (int block = 0; block < 1200; ++block)
+        pushBlock (false);
+
+    //==========================================================================
+    // Decay 2 s -> 6 s, the brief's swap. Warm-up renders 100% the live engine,
+    // so these blocks are still settled tone and still part of the reference.
     REQUIRE (morph.postKernel (makeKernel (6.0f, 8000.0f, 1), testSampleRate, 2));
-    pushBlocks (400);
 
-    auto swapMaxStep = 0.0f;
+    auto warmUpBlocks = 0;
 
-    for (auto i = steadyStateSamples; i < rendered.size(); ++i)
-        swapMaxStep = juce::jmax (swapMaxStep, std::abs (rendered[i] - rendered[i - 1]));
+    while (morph.isWarmingUp() && warmUpBlocks < 4000)
+    {
+        pushBlock (true);
+        ++warmUpBlocks;
+    }
 
-    INFO ("steady-state max step " << steadyStateMaxStep << ", across the swap " << swapMaxStep);
-    CHECK (swapMaxStep < 3.0f * steadyStateMaxStep);
+    REQUIRE_FALSE (morph.isWarmingUp());
 
-    for (auto sample : rendered)
-        REQUIRE (std::isfinite (sample));
+    // The swap begins here, exactly: the block above was the last one rendered
+    // from the live engine alone.
+    const auto swapAnchor = rendered.size();
+
+    const auto fadeSamples = static_cast<size_t> (MorphingConvolution::crossfadeSeconds * testSampleRate);
+    const auto tailSamples = static_cast<size_t> (0.5 * testSampleRate);
+
+    for (auto pushed = size_t (0); pushed < fadeSamples + tailSamples; pushed += testBlockSize)
+        pushBlock (false);
+
+    //==========================================================================
+    // The reference: the half second of settled tone immediately before the swap.
+    const auto referenceFrom = swapAnchor - static_cast<size_t> (0.5 * testSampleRate);
+    const auto referenceHalf = referenceFrom + static_cast<size_t> (0.25 * testSampleRate);
+
+    const auto settledPeakEarly = peakOver (referenceFrom, referenceHalf);
+    const auto settledPeak = peakOver (referenceHalf, swapAnchor);
+    const auto settledMaxStep = maxStepOver (referenceFrom, swapAnchor);
+
+    REQUIRE (settledPeak > 0.0f);
+
+    // The tail really has stopped building - otherwise the reference below is
+    // measuring a transient, which is the trap the previous version fell into.
+    INFO ("settled peak: first half " << settledPeakEarly << ", second half " << settledPeak);
+    CHECK (std::abs (settledPeakEarly - settledPeak) <= 0.01f * settledPeak);
+
+    const auto baselineStep = slewPerUnitPeak * settledPeak;
+
+    // ...and it really is a band-limited tone sitting on its own slew bound,
+    // which is what makes `baselineStep` an exact reference rather than a
+    // statistic. Measured 1.000006 on every run, macOS and Windows.
+    INFO ("settled max step " << settledMaxStep << " vs band-limited bound " << baselineStep);
+    CHECK (settledMaxStep > 0.9f * baselineStep);
+    CHECK (settledMaxStep < 1.05f * baselineStep);
+
+    //==========================================================================
+    const auto swapMaxStep = maxStepOver (swapAnchor, swapAnchor + fadeSamples + tailSamples);
+
+    INFO ("swap began at sample " << swapAnchor << " after " << warmUpBlocks << " warm-up blocks; "
+           << "max step across the swap " << swapMaxStep << " = "
+           << (swapMaxStep / baselineStep) << "x the settled tone's own slew (budget "
+           << clickBudget << "x)");
+    CHECK (swapMaxStep < clickBudget * baselineStep);
+
+    const auto allFinite = std::all_of (rendered.begin(), rendered.end(),
+                                         [] (float sample) { return std::isfinite (sample); });
+    CHECK (allFinite);
 }
 
 //==============================================================================
