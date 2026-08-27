@@ -146,8 +146,13 @@ TEST_CASE ("PlateTypography renders glyphs and its offset pass on a flat ground"
 
     // 7 semibold capitals at 11.5px leave a solid body of silver pixels.
     // (No shadow-pixel check here: the ground is itself nearly black, so
-    // the dark offset pass is legitimately invisible against it.)
-    CHECK (silverPixels > 50);
+    // the dark offset pass is legitimately invisible against it.) The
+    // floor is deliberately cross-platform-loose: the Windows glyph
+    // rasterizer renders visibly thinner coverage than macOS for the same
+    // face/height (sibling CI runs 33026829812/33028029166 measured
+    // roughly half the macOS coverage) - the check only needs to fail
+    // loudly for MISSING text.
+    CHECK (silverPixels > 25);
 }
 
 TEST_CASE ("Caption row stays clear of the knob hit-areas and inside the plate", "[gui][typography]")
