@@ -47,6 +47,10 @@ juce_add_plugin(Requiem
     PLUGIN_CODE Rqem
     FORMATS AU VST3 Standalone
     PRODUCT_NAME "Requiem"
+    COMPANY_WEBSITE "https://basilica-audio.github.io/website/"
+    COMPANY_COPYRIGHT "Copyright (c) 2026 Yves Vogl"
+    DESCRIPTION "Cinematic convolution reverb for orchestral and choral space"
+    VST3_CATEGORIES Fx Reverb
     ICON_BIG "docs/assets/icon.png"
     COPY_PLUGIN_AFTER_BUILD TRUE
     IS_SYNTH FALSE
