@@ -111,6 +111,14 @@ juce_add_binary_data(RequiemBinaryData SOURCES
     resources/gui/glow_knob_3.png
     resources/gui/glow_knob_4.png
     resources/gui/glow_bezel.png
+    # Suite typography: EB Garamond (OFL, resources/fonts/OFL-EBGaramond.txt),
+    # the same two faces siblings silentium/aureate/apotheosis/tenebrae
+    # embed - used by src/gui/PlateTypography for the silver knob/button
+    # captions drawn over the master render (the suite-wide typography
+    # pass, owner decision 2026-07-26: lettering is never AI-baked, it is
+    # set locally as a sharp JUCE text layer).
+    resources/fonts/EBGaramond-Regular.ttf
+    resources/fonts/EBGaramond-SemiBold.ttf
 )
 
 # ==============================================================================

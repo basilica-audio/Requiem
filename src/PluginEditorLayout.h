@@ -171,6 +171,27 @@ namespace rqm::layout
 
     constexpr int topStripHeight1x = 32;
     constexpr int topStripGap1x = 6;
+    //==========================================================================
+    // Typography pass (suite typo phase, owner decision 2026-07-26: text is
+    // never baked into the AI master - lettering is set locally as a sharp
+    // JUCE text layer, see src/gui/PlateTypography.h and
+    // docs/gui-mapping.md's typography section). The alchemie design's
+    // crystal knobs carry no function names (only baked glyph garbles at
+    // their flanks); this pass adds one silver caption per knob in the
+    // plate's bottom margin - the clean dark band UNDER the engraved
+    // scroll border (master y ~707..724; the band directly under the knob
+    // bases is blocked by the border's central fleur ornament) - plus one
+    // caption under each of the two bone buttons. Silver lettering (not
+    // gold): every baked engraving on this aubergine plate is silver, and
+    // the captions must read as part of that same engraving system.
+    constexpr int knobCaptionCy1x = 468; // bottom-margin caption row centre
+    constexpr int knobCaptionWidth1x = 100;
+    constexpr int knobCaptionHeight1x = 12;
+
+    constexpr int buttonCaptionOffsetY1x = 17; // button-centre -> caption-box top (just clear of the button's lower edge)
+    constexpr int buttonCaptionWidth1x = 64;
+    constexpr int buttonCaptionHeight1x = 11;
+
     constexpr int scaleButtonWidth1x = 64;
 
     constexpr int baseEditorWidth = plateWidth1x;
