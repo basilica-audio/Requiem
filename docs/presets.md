@@ -1,6 +1,6 @@
 # Factory presets
 
-Eleven factory presets ship with Requiem v0.2.0, embedded via BinaryData from
+Seventeen factory presets ship with Requiem, embedded via BinaryData from
 `presets/factory/*.json` (see `docs/architecture.md`'s "M2 preset system and
 i18n frame" section for the build wiring). All are sourced starting points
 from `docs/design-brief.md`'s "Factory Presets" section - see that document's

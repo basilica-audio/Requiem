@@ -7,7 +7,7 @@
 [![CI](https://github.com/basilica-audio/requiem/actions/workflows/ci.yml/badge.svg)](https://github.com/basilica-audio/requiem/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-> **Work in progress.** Requiem is pre-1.0 and under active development. Binaries for macOS and Windows are available from the [Releases](../../releases) page (currently unsigned — see the release notes); building from source works too. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
+> **Work in progress.** Requiem is pre-1.0 and under active development. Binaries for macOS and Windows are available from the [Releases](../../releases) page (macOS builds are signed with a Developer ID certificate, notarized and stapled); building from source works too. Expect breaking changes until v1.0.0 ships (see [Roadmap](#roadmap)).
 
 <!-- ==BEGIN BODY== (plugin engineer: replace this block with What it is / Features / Signal flow / Roadmap) -->
 ## What it is
@@ -24,7 +24,7 @@ Requiem is a cinematic **convolution reverb** built for orchestral and choral sp
 - **Pre-Delay** (0-250 ms) separates the direct sound from the tail's onset - useful for keeping palm-muted rhythm parts tight while strings/choir bloom behind them.
 - **Width** control (0-200%) reshapes the wet signal's stereo image via mid/side scaling, independent of the dry signal.
 - Optional **user impulse response** override (Load IR.../Clear IR in the editor) - drop in your own captured space, persisted in the plugin's saved state. Rejects unreadable/non-audio files and pathologically long ones rather than loading them blindly.
-- **Preset system**: 11 factory presets plus save/rename/delete/import/export for your own, with a German-localised interface (English elsewhere).
+- **Preset system**: 17 factory presets plus save/rename/delete/import/export for your own, with a German-localised interface (English elsewhere).
 - Latency-compensated Dry/Wet **Mix** and post-mix **Output** trim.
 - AU / VST3 / Standalone, built on JUCE 8.
 
@@ -60,9 +60,16 @@ Full musical descriptions and usage tips: [`docs/manual.md`](docs/manual.md). Fa
 Tracked as GitHub milestones and issues (`gh issue list`, `gh api repos/basilica-audio/requiem/milestones`). M2 (preset system) shipped in v0.2.0. Planned beyond v0.2.0: a custom vector-drawn GUI plus an accessibility pass (current editor is a functional slider/combo/toggle layout - M3), and signed/notarized release builds (M4).
 <!-- ==END BODY== -->
 
+## Documentation
+
+- [`docs/manual.md`](docs/manual.md) — the user manual: what every control does, and how to use it
+- [`docs/presets.md`](docs/presets.md) — what each factory preset is for
+- [`CHANGELOG.md`](CHANGELOG.md) — what shipped in each release
+- [Requiem on basilica-audio.github.io](https://basilica-audio.github.io/website/requiem/) — the product page (English and German)
+
 ## Installation
 
-No pre-built binaries are published yet (see the work-in-progress notice above). Once releases begin, installation will follow the standard plugin locations:
+Download the archive for your platform from the [Releases](../../releases) page and copy the bundles into the standard plugin locations:
 
 **macOS**
 
