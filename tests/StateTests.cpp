@@ -597,7 +597,12 @@ TEST_CASE ("6.10 A pre-v0.3.0 state loads with every new parameter at its neutra
     CHECK (valueOf (ParamIDs::tailModRate) == Catch::Approx (100.0f).margin (1.0e-2));
     CHECK (valueOf (ParamIDs::bloomAmount) == Catch::Approx (30.0f).margin (1.0e-3));
     CHECK (valueOf (ParamIDs::lowCut) == Catch::Approx (20.0f).margin (1.0e-2));
-    CHECK (valueOf (ParamIDs::highCut) == Catch::Approx (20000.0f).margin (1.0f));
+    // highCut is makeLogFrequencyRange (1000, 20000), so valueOf() round-trips
+    // the default through mapFromLog10 -> mapToLog10 in float. Error bound:
+    // |dV/dn| * k * eps_f32 = V * ln (max/min) * k * 1.2e-7
+    // = 20000 * ln (20) * k * 1.2e-7 ~ 0.007 * k Hz; the k ULPs accumulated
+    // across log10f/powf stay well under 8, so the error is < 0.06 Hz.
+    CHECK (valueOf (ParamIDs::highCut) == Catch::Approx (20000.0f).margin (0.1f));
     CHECK (valueOf (ParamIDs::duckAmount) == Catch::Approx (0.0f).margin (1.0e-3));
     CHECK (valueOf (ParamIDs::duckAttack) == Catch::Approx (10.0f).margin (1.0e-2));
     CHECK (valueOf (ParamIDs::duckRelease) == Catch::Approx (250.0f).margin (1.0e-1));
