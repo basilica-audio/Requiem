@@ -46,6 +46,23 @@ namespace
         { 4, ParamIDs::size, "Size" },
     }};
 
+    // ==================== typography pass ====================
+    // One silver caption per knob (bottom-margin row, see
+    // PluginEditorLayout.h's typography block) and per button. Silver, not
+    // gold: every baked engraving on this plate is silver - the captions
+    // must read as part of that same engraving system. The dark offset
+    // pass doubles as the drop shadow.
+    constexpr const char* knobCaptionText[5] = { "DECAY", "PRE-DELAY", "MIX", "DAMPING", "SIZE" };
+    constexpr const char* freezeCaptionText = "FREEZE";
+    constexpr const char* irCaptionText = "IMPULSE";
+
+    const basilica::gui::EngravedTextStyle silverCaptionStyle {
+        juce::Colour (0xe6cfd4de), juce::Colour (0x90000000), 11.5f, 0.16f, true
+    };
+    const basilica::gui::EngravedTextStyle silverButtonCaptionStyle {
+        juce::Colour (0xdccfd4de), juce::Colour (0x90000000), 10.0f, 0.16f, true
+    };
+
     // Requiem's needle displays the processor's own post-engine output
     // level (RequiemAudioProcessor::getCurrentOutputLevelDb(), already
     // atomic/real-time-safe - see PluginProcessor.h's docs), mapped
@@ -98,7 +115,9 @@ namespace
 RequiemAudioProcessorEditor::RequiemAudioProcessorEditor (RequiemAudioProcessor& processorToEdit)
     : juce::AudioProcessorEditor (&processorToEdit),
       audioProcessor (processorToEdit),
-      presetBar (initLocalisationThenGetPresetManager (processorToEdit))
+      presetBar (initLocalisationThenGetPresetManager (processorToEdit)),
+      typography (BinaryData::EBGaramondRegular_ttf, BinaryData::EBGaramondRegular_ttfSize,
+                  BinaryData::EBGaramondSemiBold_ttf, BinaryData::EBGaramondSemiBold_ttfSize)
 {
     masterImage = loadImage (BinaryData::master_alchemie_png, BinaryData::master_alchemie_pngSize);
 
@@ -453,11 +472,54 @@ void RequiemAudioProcessorEditor::paint (juce::Graphics& g)
         g.fillEllipse (juce::Rectangle<float> (diameter, diameter).withCentre (centre));
     }
 
+    // 8. Typography layer (suite typo phase - PlateTypography.h): one
+    // silver caption per knob in the bottom margin, one under each bone
+    // button. Drawn LAST so no glow/overlay blit can cover it.
+    drawPlateTypography (g, plateOrigin, scale);
+
     // (The needle is a separate HubNeedle child component, drawn after this
     // method returns - see resized() for its bounds. Everything else -
     // silver engravings, the moon-dial face itself, the crystal knobs' own
     // baked facets, the 2 dark glass windows - stays BAKED in the master,
     // no draw calls for any of it.)
+}
+
+void RequiemAudioProcessorEditor::drawPlateTypography (juce::Graphics& g, juce::Point<float> plateOrigin, float scale) const
+{
+    const auto toScreen = [&] (juce::Rectangle<float> local1x)
+    {
+        return juce::Rectangle<float> (plateOrigin.x + local1x.getX() * scale,
+                                       plateOrigin.y + local1x.getY() * scale,
+                                       local1x.getWidth() * scale,
+                                       local1x.getHeight() * scale);
+    };
+
+    for (size_t i = 0; i < knobLayout.size(); ++i)
+    {
+        const auto& slot = knobSlots1x[(size_t) knobLayout[i].slotIndex];
+
+        const juce::Rectangle<float> box1x ((float) (slot.cx1x - knobCaptionWidth1x / 2),
+                                            (float) (knobCaptionCy1x - knobCaptionHeight1x / 2),
+                                            (float) knobCaptionWidth1x,
+                                            (float) knobCaptionHeight1x);
+
+        typography.drawEngraved (g, knobCaptionText[i], toScreen (box1x), scale, silverCaptionStyle);
+    }
+
+    const auto buttonCaptionBox1x = [] (int cx1x, int cy1x)
+    {
+        return juce::Rectangle<float> ((float) (cx1x - buttonCaptionWidth1x / 2),
+                                       (float) (cy1x + buttonCaptionOffsetY1x),
+                                       (float) buttonCaptionWidth1x,
+                                       (float) buttonCaptionHeight1x);
+    };
+
+    typography.drawEngraved (g, freezeCaptionText,
+                             toScreen (buttonCaptionBox1x (buttonLeft1x.cx1x, buttonLeft1x.cy1x)),
+                             scale, silverButtonCaptionStyle);
+    typography.drawEngraved (g, irCaptionText,
+                             toScreen (buttonCaptionBox1x (buttonRight1x.cx1x, buttonRight1x.cy1x)),
+                             scale, silverButtonCaptionStyle);
 }
 
 void RequiemAudioProcessorEditor::resized()

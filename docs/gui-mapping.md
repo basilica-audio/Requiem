@@ -265,3 +265,28 @@ genuinely has no ring, matching the briefing's own description.)
 - Needle sweep range (±130°) and its dB mapping — measured/decided for this
   pass, see "Needle sweep measurement" above (no JSON field covers this;
   the design has no printed numerals to calibrate against).
+
+## Typography pass (suite typo phase)
+
+Owner decision 2026-07-26: lettering is never AI-baked - it is set locally
+as a sharp JUCE text layer in the suite serif (EB Garamond via BinaryData,
+OFL). Implementation: `src/gui/PlateTypography.h` (copied verbatim from
+the aureate pilot's typography pass), drawn last within `paint()` so no
+glow/overlay blit can cover it.
+
+What is lettered, all in SILVER (every baked engraving on this aubergine
+plate is silver - the captions must read as part of that same engraving
+system, not as gold additions):
+
+- **Knob captions** `DECAY / PRE-DELAY / MIX / DAMPING / SIZE`, one row in
+  the plate's bottom margin (the clean dark band UNDER the engraved
+  scroll border, master y ~707..724) - the band directly under the knob
+  bases is blocked by the border's central fleur ornament, and everything
+  else around the knobs is baked vine/sigil relief.
+- **Button captions** `FREEZE` (left bone button) and `IMPULSE` (right,
+  the IR-loader menu), directly under each button.
+
+The moon dial keeps its baked alchemical glyphs - they ARE this design's
+scale, deliberately esoteric; no numerals are added there.
+
+Tests: `tests/gui/EditorTypographyTests.cpp`.

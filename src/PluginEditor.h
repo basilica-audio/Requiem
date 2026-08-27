@@ -11,6 +11,7 @@
 #include "gui/FocusRingButton.h"
 #include "gui/FocusRingToggle.h"
 #include "gui/InvisibleKnob.h"
+#include "gui/PlateTypography.h"
 #include "presets/PresetBar.h"
 
 class RequiemAudioProcessor;
@@ -79,6 +80,7 @@ private:
     void configureKnob (Knob& knob, const juce::String& parameterId, const juce::String& labelText);
     void applyScaleStep (int newStepIndex);
     void cycleScale();
+    void drawPlateTypography (juce::Graphics& g, juce::Point<float> plateOrigin, float scale) const;
     void showIrMenu();
     void repaintButtonZone (const rqm::layout::ButtonSlot1x& slot) noexcept;
 
@@ -98,6 +100,7 @@ private:
     // 4 outer knobs' ring glows, parallel to rqm::layout::knobRingZones
     // (NOT to knobs[] directly - the centre knob at knobSlots1x[2] has no
     // ring entry, see centreKnobSlotIndex).
+    basilica::gui::PlateTypography typography;
     std::array<basilica::gui::AdditiveGlow, 4> knobRingGlows;
 
     basilica::gui::AdditiveGlow bezelGlow;
