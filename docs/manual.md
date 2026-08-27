@@ -180,7 +180,7 @@ A few mechanisms worth knowing about if you want to understand why the Living Ta
 
 ## Presets
 
-The preset bar at the top of the editor (`[<] [PresetName] [>] [Save] [Save As...] [Delete] [Import...] [Export...]`) gives you eleven factory starting points (see `docs/presets.md` for what each one is voiced for) plus your own saved presets, stored per-user at `~/Library/Audio/Presets/Yves Vogl/Requiem/` on macOS (`%APPDATA%/Yves Vogl/Requiem/Presets/` on Windows):
+The preset bar at the top of the editor (`[<] [PresetName] [>] [Save] [Save As...] [Delete] [Import...] [Export...]`) gives you eleven factory starting points (see `docs/presets.md` for what each one is voiced for) plus your own saved presets, stored per-user at `~/Library/Audio/Presets/Basilica Audio/Requiem/` on macOS (`%APPDATA%/Basilica Audio/Requiem/Presets/` on Windows):
 
 - **[<] / [>]** step through factory presets, then your own, alphabetically.
 - **Clicking the preset name** opens a menu with Factory/User sections plus "Set current as default" (what a fresh plugin instance loads).
